@@ -8,6 +8,7 @@ import Data.List (isInfixOf)
 import Clash.Prelude
 import Clash.Explicit.Testbench
 
+{-# NOINLINE topEntity #-}
 {-# ANN topEntity
   (Synthesize
     { t_name     = "PortProductsSum_topEntity"
@@ -25,6 +26,7 @@ topEntity :: (Signal System Int, Signal System (Maybe Int))
 topEntity = (pure 0, pure (Just 1))
 
 -- Simulation test
+{-# NOINLINE testBench #-}
 {-# ANN testBench
   (Synthesize
     { t_name     = "PortProductsSum_testBench"

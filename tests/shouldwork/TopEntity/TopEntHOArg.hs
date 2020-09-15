@@ -17,3 +17,4 @@ g
   -> Vec 2 (Bit,Bool,Maybe Bit,(Bit, Bool), Bool)
 g b = zipWith (f b)
 {-# ANN g Synthesize {t_name = "g", t_inputs = [PortName "z", PortProduct "" []], t_output = PortProduct "" []} #-}
+{-# NOINLINE g #-}

@@ -4,6 +4,7 @@ module NoCPR where
 
 import           Clash.Prelude
 
+{-# NOINLINE example #-}
 {-# ANN example
   (Synthesize
           { t_name   = "example"

@@ -60,7 +60,7 @@ twiddle = (+ 1e-5) -- prevent any optimiser from doing: asin . sin <=> id
 
 pi_noinline :: Floating a => a
 pi_noinline = pi
-{-# NOINLINE pi_noinline #-}
+-- {-# NOINLINE pi_noinline #-} Disabled so PE can inline
 
 a,b,c,d,e,f :: Floating a => a
 a = 1.0

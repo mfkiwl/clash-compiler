@@ -8,6 +8,7 @@ import System.FilePath ((</>), takeDirectory)
 import Clash.Prelude
 import Clash.Explicit.Testbench
 
+{-# NOINLINE topEntity #-}
 {-# ANN topEntity
   (Synthesize
     { t_name     = "PortNamesWithSingletonVector_topEntity"

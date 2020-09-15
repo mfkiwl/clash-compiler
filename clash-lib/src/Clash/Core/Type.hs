@@ -250,6 +250,7 @@ coreView1 tcMap ty = case tyView ty of
          AlgTyCon {algTcRhs = (NewTyCon _ nt)}
            -> newTyConInstRhs nt args
          _ -> reduceTypeFamily tcMap ty
+  OtherType (AnnType _ ty') -> coreView1 tcMap ty'
   _ -> Nothing
 
 -- | Instantiate and Apply the RHS/Original of a NewType with the given
@@ -678,7 +679,8 @@ normalizeType tcMap = go
         nameOcc tcNm == "Clash.Sized.Internal.BitVector.BitVector" ||
         nameOcc tcNm == "Clash.Sized.Internal.Index.Index"         ||
         nameOcc tcNm == "Clash.Sized.Internal.Signed.Signed"       ||
-        nameOcc tcNm == "Clash.Sized.Internal.Unsigned.Unsigned"
+        nameOcc tcNm == "Clash.Sized.Internal.Unsigned.Unsigned"   ||
+        nameOcc tcNm == "Clash.Signal.BiSignal.BiSignalOut"
       -> mkTyConApp tcNm (map go args)
       | otherwise
       -> case lookupUniqMap' tcMap tcNm of

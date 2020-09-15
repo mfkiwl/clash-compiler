@@ -7,6 +7,7 @@ import System.Environment (getArgs)
 import System.FilePath ((</>), takeDirectory)
 
 
+{-# NOINLINE topEntity #-}
 {-# ANN topEntity Synthesize {t_name = "top", t_inputs = [PortName "x"], t_output = PortName "y"} #-}
 topEntity
   :: Signal System (Int, Int, Int, Int, Int)

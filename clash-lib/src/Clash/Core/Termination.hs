@@ -1,3 +1,4 @@
+{-# LANGUAGE DeriveAnyClass #-}
 {-# LANGUAGE LambdaCase #-}
 
 module Clash.Core.Termination
@@ -7,12 +8,16 @@ module Clash.Core.Termination
   , recursiveGroup
   ) where
 
+import Control.DeepSeq (NFData)
 import Control.Lens.Fold
 import Data.Graph (SCC(..))
 import qualified Data.Graph as Graph
 import qualified Data.List as List
+import GHC.Generics (Generic)
 
 import Clash.Core.FreeVars
+import Clash.Core.Name
+import Clash.Core.Term
 import Clash.Core.Var
 import Clash.Core.VarEnv
 import Clash.Driver.Types
@@ -27,7 +32,7 @@ data RecInfo = RecInfo
     -- components.
   , nonRecBindings :: VarSet
     -- ^ Non-recursive bindings
-  }
+  } deriving (Generic, NFData)
 
 instance Show RecInfo where
   show (RecInfo rs ns) =
@@ -76,8 +81,26 @@ mkRecInfo =
   dependencies =
     Graph.stronglyConnComp . eltsVarEnv . fmap go
    where
-    go x = let fvs = bindingTerm x ^.. freeIds
-            in (x, bindingId x, fvs)
+    go x = let fvs  = bindingTerm x ^.. freeIds
+               fvs' = if hasPrimRecCall x then bindingId x : fvs else fvs
+            in (x, bindingId x, fvs')
+
+-- I'm pretty sure there's no mutual recursion from primops
+hasPrimRecCall :: Binding Term -> Bool
+hasPrimRecCall b = go (bindingTerm b)
+ where
+  go (Var _)       = False
+  go (Data _)      = False
+  go (Literal _)   = False
+  go (Prim p)      = primName p == nameOcc (varName (bindingId b))
+  go (Lam _ x)     = go x
+  go (TyLam _ x)   = go x
+  go (App x y)     = go x || go y
+  go (TyApp x _)   = go x
+  go (Letrec bs x) = go x || any go (fmap snd bs)
+  go (Case x _ as) = go x || any go (fmap snd as)
+  go (Cast x _ _)  = go x
+  go (Tick _ x)    = go x
 
 -- | Check if a global binder is recursive. To be conservative, binders which
 -- are not included in the RecInfo are assumed to be recursive.

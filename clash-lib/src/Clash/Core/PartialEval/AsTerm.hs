@@ -16,13 +16,9 @@ module Clash.Core.PartialEval.AsTerm
   ) where
 
 import Data.Bifunctor (first, second)
-import Data.Graph (SCC(..), flattenSCCs)
 
-import Clash.Core.FreeVars (localFVsOfTerms)
 import Clash.Core.PartialEval.NormalForm
-import Clash.Core.Term (Term(..), LetBinding, Pat, Alt, mkApps)
-import Clash.Core.Util (sccLetBindings)
-import Clash.Core.VarEnv (elemVarSet)
+import Clash.Core.Term (Term(..), Pat, Alt, mkApps)
 
 -- | Convert a term in some normal form back into a Term. This is important,
 -- as it may perform substitutions which have not yet been performed (i.e. when
@@ -40,21 +36,9 @@ instance (AsTerm a) => AsTerm (Neutral a) where
     NeLetrec bs x ->
       let bs' = fmap (second asTerm) bs
           x'  = asTerm x
-       in removeUnusedBindings bs' x'
+       in Letrec bs' x'
 
     NeCase x ty alts -> Case (asTerm x) ty (altsToTerms alts)
-
-removeUnusedBindings :: [LetBinding] -> Term -> Term
-removeUnusedBindings bs x
-  | null used = x
-  | otherwise = Letrec used x
- where
-  free = localFVsOfTerms [x]
-  used = flattenSCCs $ filter isUsed (sccLetBindings bs)
-
-  isUsed = \case
-    AcyclicSCC y -> fst y `elemVarSet` free
-    CyclicSCC ys -> any (flip elemVarSet free . fst) ys
 
 instance AsTerm Value where
   asTerm = \case
@@ -72,8 +56,8 @@ instance AsTerm Normal where
     NNeutral neu -> asTerm neu
     NLiteral lit -> Literal lit
     NData dc args -> mkApps (Data dc) (argsToTerms args)
-    NLam i x _env -> Lam i (asTerm x)
-    NTyLam i x _env -> TyLam i (asTerm x)
+    NLam i x -> Lam i (asTerm x)
+    NTyLam i x -> TyLam i (asTerm x)
     NCast x a b -> Cast (asTerm x) a b
     NTick x tick -> Tick tick (asTerm x)
 

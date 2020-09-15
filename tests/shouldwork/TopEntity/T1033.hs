@@ -7,6 +7,7 @@ import System.Environment
 import System.FilePath
 import qualified Prelude as P
 
+{-# NOINLINE topEntity #-}
 {-# ANN topEntity
   (Synthesize
     { t_name   = "top"

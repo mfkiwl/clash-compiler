@@ -8,6 +8,7 @@ import System.FilePath ((</>), takeDirectory)
 import Clash.Prelude
 import Clash.Explicit.Testbench
 
+{-# NOINLINE topEntity #-}
 {-# ANN topEntity
   (Synthesize
     { t_name     = "PortNames_topEntity"
@@ -25,6 +26,7 @@ topEntity :: (Signal System Int, (Signal System Int, Signal System Int))
 topEntity = (pure 0, (pure 1, pure 2))
 
 -- Simulation test
+{-# NOINLINE testBench #-}
 {-# ANN testBench
   (Synthesize
     { t_name     = "PortNames_testBench"

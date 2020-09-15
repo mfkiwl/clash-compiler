@@ -19,6 +19,7 @@ module Clash.Core.PartialEval.NormalForm
   , Args
   , Neutral(..)
   , Value(..)
+  , collectValueApps
   , mkValueTicks
   , stripValue
   , collectValueTicks
@@ -36,20 +37,17 @@ import Data.Map.Strict (Map)
 
 import Clash.Core.DataCon (DataCon)
 import Clash.Core.Literal
-import Clash.Core.Term (Term(..), PrimInfo(primName), TickInfo, Pat)
+import Clash.Core.Term (Term(..), PrimInfo(..), TickInfo, Pat)
 import Clash.Core.TyCon (TyConMap)
 import Clash.Core.Type (Type, TyVar)
 import Clash.Core.Var (Id)
 import Clash.Core.VarEnv (VarEnv, InScopeSet)
 import Clash.Driver.Types (Binding(..))
 
-type Args a
-  = [Arg a]
-
 -- | An argument applied to a function / data constructor / primitive.
 --
-type Arg a
-  = Either a Type
+type Arg a = Either a Type
+type Args a = [Arg a]
 
 -- | Neutral terms cannot be reduced, as they represent things like variables
 -- which are unknown, partially applied functions, or case expressions where
@@ -99,6 +97,17 @@ data Value
   | VThunk    !Term !LocalEnv
   deriving (Show)
 
+collectValueApps :: Value -> Maybe (Neutral Value, Args Value)
+collectValueApps (VNeutral n) = Just (go [] n)
+ where
+  go !args = \case
+    NeApp x y -> go (Left y : args) x
+    NeTyApp x ty -> go (Right ty : args) x
+    neu -> (neu, args)
+
+collectValueApps (VTick x _) = collectValueApps x
+collectValueApps _ = Nothing
+
 mkValueTicks :: Value -> [TickInfo] -> Value
 mkValueTicks = foldl VTick
 
@@ -124,6 +133,15 @@ isUndefined = \case
       , "Clash.XException.errorX"
       ]
 
+  VNeutral (NeApp n _) ->
+    isUndefined (VNeutral n)
+
+  VNeutral (NeTyApp n _) ->
+    isUndefined (VNeutral n)
+
+  VTick value _ -> isUndefined value
+  VCast value _ _ -> isUndefined value
+
   _ -> False
 
 -- | A term which is in beta-normal eta-long form (NF). This has no redexes,
@@ -133,21 +151,21 @@ isUndefined = \case
 -- original term was evaluated. This makes it easier for the AsTerm instance
 -- for Normal to reintroduce let expressions before lambdas without
 -- accidentally floating a let using a lambda bound variable outwards.
+-- TODO Is this still needed now we have NeLetrec and keep let bindings
+-- that do work?
 --
 data Normal
   = NNeutral  !(Neutral Normal)
   | NLiteral  !Literal
   | NData     !DataCon !(Args Normal)
-  | NLam      !Id !Normal !LocalEnv
-  | NTyLam    !TyVar !Normal !LocalEnv
+  | NLam      !Id !Normal
+  | NTyLam    !TyVar !Normal
   | NCast     !Normal !Type !Type
   | NTick     !Normal !TickInfo
   deriving (Show)
 
 data LocalEnv = LocalEnv
-  { lenvContext :: Id
-    -- ^ The id of the term currently under evaluation.
-  , lenvTypes :: Map TyVar Type
+  { lenvTypes :: Map TyVar Type
     -- ^ Local type environment. These are types that are introduced while
     -- evaluating the current term (i.e. by type applications)
   , lenvValues :: Map Id Value
@@ -157,12 +175,22 @@ data LocalEnv = LocalEnv
     -- ^ The amount of fuel left in the local environment when the previous
     -- head was reached. This is needed so resuming evaluation does not lead
     -- to additional fuel being available.
-  , lenvKeepLifted :: Bool
-    -- ^ When evaluating, keep data constructors for boxed data types (e.g. I#)
-    -- instead of converting these back to their corresponding primitive. This
-    -- is used when evaluating terms where the result is subject of a case
-    -- expression (see note: lifted data types).
-  } deriving (Show)
+  }
+
+instance Show LocalEnv where
+  show = const "<env>"
+{-
+  show (LocalEnv ts vs f) = mconcat
+    [ "LocalEnv{"
+    , "lenvTypes="
+    , show ts
+    , ",lenvValues="
+    , show vs
+    , ",lenvFuel="
+    , show f
+    , "}"
+    ]
+-}
 
 -- TODO Add recursion info to the global environment. Until then we are forced
 -- to spend fuel on non-recursive (terminating) terms.
@@ -187,6 +215,17 @@ data GlobalEnv = GlobalEnv
     -- ^ The heap containing the results of any evaluated IO primitives.
   , genvAddr :: Int
     -- ^ The address of the next element to be inserted into the heap.
+  , genvIsSubject :: Bool
+    -- ^ Whether the evalatuor currently in the subject of a case expression,
+    -- or evaluating a term to be inlined as part of the subject. If this is
+    -- true, the following changes apply to ensure maximum opportunities for
+    -- case of known constructor to fire:
+    --
+    --   * data constructors for boxed types (e.g. I#) are preserved rather
+    --   than being converted back into their corresponding primitives
+    --
+    --   * identifiers in the local environment which refer to something which
+    --   performs work are inlined, as this may result in removing the work
   , genvWorkCache :: VarEnv Bool
     -- ^ Cache for the results of isWorkFree. This is required to use
     -- Clash.Rewrite.WorkFree.isWorkFree.

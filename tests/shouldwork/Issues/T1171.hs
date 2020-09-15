@@ -11,6 +11,7 @@ import System.FilePath
 
 import Clash.Prelude
 
+{-# NOINLINE f #-}
 {-# ANN f (Synthesize
       { t_name   = "f"
       , t_inputs =

@@ -59,6 +59,7 @@ module Clash.Unique
     -- ** Modifications
   , extendUniqSet
   , unionUniqSet
+  , differenceUniqSet
   , delUniqSetDirectly
     -- ** Working with predicates
     -- *** Searching
@@ -347,6 +348,14 @@ unionUniqSet
   -> UniqSet a
   -> UniqSet a
 unionUniqSet (UniqSet env1) (UniqSet env2) = UniqSet (IntMap.union env1 env2)
+
+-- | Difference of two sets
+differenceUniqSet
+  :: UniqSet a
+  -> UniqSet a
+  -> UniqSet a
+differenceUniqSet (UniqSet env1) (UniqSet env2) =
+  UniqSet (IntMap.difference env1 env2)
 
 -- | Check whether an element exists in the set
 elemUniqSet

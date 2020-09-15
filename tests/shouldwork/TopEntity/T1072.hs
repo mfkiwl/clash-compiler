@@ -13,6 +13,7 @@ topEntity2
 topEntity2 (clk, rst) (en, a) = register clk rst en 0 a
 {-# NOINLINE topEntity2 #-}
 
+{-# NOINLINE topEntity #-}
 {-# ANN topEntity
   (Synthesize
     { t_name   = "top"

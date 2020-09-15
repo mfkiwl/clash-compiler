@@ -31,15 +31,28 @@ import Clash.Rewrite.Util
 -- | Normalisation transformation
 normalization :: NormRewrite
 normalization =
-  rmDeadcode >-> multPrim >-> constantPropagation >-> rmUnusedExpr >-!-> anf >-!-> rmDeadcode >->
-  bindConst >-> letTL
-#if !EXPERIMENTAL_EVALUATOR
-  >-> evalConst
-#endif
-  >-!-> cse >-!-> cleanup >->
-  xOptim >-> rmDeadcode >->
-  cleanup >-> bindSimIO >-> recLetRec >-> splitArgs
+  pe >-!->
+  rmDeadcode >->
+  multPrim >->
+  constantPropagation >->
+  rmUnusedExpr >-!->
+  anf >-!->
+  rmDeadcode >->
+  bindConst >->
+  letTL >->
+  evalConst >-!->
+  appProp >->
+  cse >-!->
+  cleanup >->
+  xOptim >->
+  rmDeadcode >->
+  cleanup >->
+  bindSimIO >->
+  recLetRec >->
+  splitArgs
   where
+    pe         = apply "partialEval" partialEval
+    appProp    = topdownR (apply "applicationPropagation" appPropFast)
     multPrim   = topdownR (apply "setupMultiResultPrim" setupMultiResultPrim)
     anf        = topdownR (apply "nonRepANF" nonRepANF) >-> apply "ANF" makeANF >-> topdownR (apply "caseCon" caseCon)
     letTL      = topdownSucR (apply "topLet" topLet)
@@ -48,9 +61,7 @@ normalization =
     rmDeadcode = bottomupR (apply "deadcode" deadCode)
     bindConst  = topdownR (apply "bindConstantVar" bindConstantVar)
     -- See [Note] bottomup traversal evalConst:
-#if !EXPERIMENTAL_EVALUATOR
     evalConst  = bottomupR (apply "evalConst" reduceConst)
-#endif
     cse        = topdownR (apply "CSE" simpleCSE)
     xOptim     = bottomupR (apply "xOptimize" xOptimize)
     cleanup    = topdownR (apply "etaExpandSyn" etaExpandSyn) >->
@@ -58,27 +69,26 @@ normalization =
                  innerMost (applyMany [("caseCon"        , caseCon)
                                       ,("bindConstantVar", bindConstantVar)
                                       ,("letFlat"        , flattenLet)])
-                 >-> rmDeadcode >-> letTL
+                 >-> rmUnusedExpr >-> rmDeadcode >-> letTL
     splitArgs  = topdownR (apply "separateArguments" separateArguments) !->
                  topdownR (apply "caseCon" caseCon)
     bindSimIO  = topdownR (apply "bindSimIO" inlineSimIO)
-
 
 constantPropagation :: NormRewrite
 constantPropagation =
   inlineAndPropagate >->
   caseFlattening >->
   etaTL >->
-  dec >->
+  -- dec >->
   spec >->
-  dec >->
+  -- dec >->
   conSpec
   where
     etaTL              = apply "etaTL" etaExpansionTL !-> topdownR (apply "applicationPropagation" appPropFast)
     inlineAndPropagate = repeatR (topdownR (applyMany transPropagateAndInline) >-> inlineNR)
     spec               = bottomupR (applyMany specTransformations)
     caseFlattening     = repeatR (topdownR (apply "caseFlat" caseFlat))
-    dec                = repeatR (topdownR (apply "DEC" disjointExpressionConsolidation))
+    -- dec                = repeatR (topdownR (apply "DEC" disjointExpressionConsolidation))
     conSpec            = bottomupR  ((apply "appPropCS" appPropFast !->
                                      bottomupR (apply "constantSpec" constantSpec)) >-!
                                      apply "constantSpec" constantSpec)
@@ -88,9 +98,7 @@ constantPropagation =
       [ ("applicationPropagation", appPropFast          )
       , ("bindConstantVar"       , bindConstantVar      )
       , ("caseLet"               , caseLet              )
-#if !EXPERIMENTAL_EVALUATOR
       , ("caseCase"              , caseCase             )
-#endif
       , ("caseCon"               , caseCon              )
       , ("elemExistentials"      , elemExistentials     )
       , ("caseElemNonReachable"  , caseElemNonReachable )

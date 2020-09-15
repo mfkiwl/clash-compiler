@@ -26,6 +26,7 @@ data VGAOut dom = VGAOut
     , vgaB     :: Signal dom (Unsigned 8)
     }
 
+{-# NOINLINE getVgaOut #-}
 {-# ANN getVgaOut
    (Synthesize
      { t_name   = "Pattern"
@@ -92,4 +93,3 @@ mainSystemVerilog :: IO ()
 mainSystemVerilog = do
   netlist <- runToNetlistStage SSystemVerilog id testPath
   mapM_ (assertOneVGA . getComponent) netlist
-

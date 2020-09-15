@@ -281,8 +281,8 @@ instance ClashPretty Term where
 data BindingSite = LambdaBind | CaseBind | LetBind
 
 instance PrettyPrec (Var a) where
-  pprPrec _ v@(TyVar {}) = pprM $ varName v
-  pprPrec _ v@(Id {})    = do
+  pprPrec _ v@(TyVar {}) = pprM (varName v)
+  pprPrec _ v = do
     v'  <- pprM (varName v)
     ty' <- pprM (varType v)
     return $ v' <> (annotate (AnnSyntax Type) $ align (space <> dcolon <+> ty'))

@@ -138,7 +138,7 @@ data PrimInfo = PrimInfo
   --
   -- See: 'Clash.Normalize.Transformations.setupMultiResultPrim'
   , primCoreId   :: !(Maybe Id)
-  } deriving (Eq,Show,Generic,NFData,Hashable,Binary)
+  } deriving (Show,Generic,NFData,Hashable,Binary)
 
 data MultiPrimInfo = MultiPrimInfo
   { mpi_primInfo :: PrimInfo

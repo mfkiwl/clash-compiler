@@ -6,6 +6,7 @@ import System.FilePath
 import qualified Prelude as P
 import GHC.Stack
 
+{-# NOINLINE topEntity #-}
 {-# ANN topEntity
   (Synthesize
     { t_name   = "top"

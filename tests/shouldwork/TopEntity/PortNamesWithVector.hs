@@ -11,6 +11,7 @@ import Clash.Explicit.Testbench
 data A = A Int Int deriving (Eq, Generic, ShowX)
 data B = B Int Int Int deriving (Eq, Generic, ShowX)
 
+{-# NOINLINE topEntity #-}
 {-# ANN topEntity
   (Synthesize
     { t_name     = "PortNamesWithVector_topEntity"
@@ -39,6 +40,7 @@ topEntity :: Signal System (Int, Vec 3 (A, B))
 topEntity = pure (0, repeat (A 1 2, B 3 4 5))
 
 -- Simulation test
+{-# NOINLINE testBench #-}
 {-# ANN testBench
   (Synthesize
     { t_name     = "PortNamesWithVector_testBench"

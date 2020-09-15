@@ -49,29 +49,25 @@ ghcup set cabal ${CABAL_VERSION}
 cabal --version
 ghc --version
 
-# File may exist as part of a dist.tar.zst
-if [ ! -f cabal.project.local ]; then
-  cp .ci/cabal.project.local .
+cp .ci/cabal.project.local .
 
-  MULTIPLE_HIDDEN=${MULTIPLE_HIDDEN:-yes}
-  if [[ "$MULTIPLE_HIDDEN" == "yes" ]]; then
-    sed -i 's/flags: +doctests/flags: +doctests +multiple-hidden/g' cabal.project.local
-  elif [[ "$MULTIPLE_HIDDEN" == "no" ]]; then
-    sed -i 's/flags: +doctests/flags: +doctests -multiple-hidden/g' cabal.project.local
-  fi
+if [[ "$MULTIPLE_HIDDEN" == "yes" ]]; then
+  sed -i 's/flags: +doctests/flags: +doctests +multiple-hidden/g' cabal.project.local
+elif [[ "$MULTIPLE_HIDDEN" == "no" ]]; then
+  sed -i 's/flags: +doctests/flags: +doctests -multiple-hidden/g' cabal.project.local
+fi
 
-  if [[ "$CI_COMMIT_BRANCH" =~ "^partial-evaluator-" ]]; then
-    sed -i 's/-experimental-evaluator/+experimental-evaluator/g' cabal.project.local
-  fi
-
-  set +u
-  if [[ "$GHC_HEAD" == "yes" ]]; then
-    cat .ci/cabal.project.local.append-HEAD >> cabal.project.local
-  fi
-  set -u
-
-  # Fix index-state to prevent rebuilds if Hackage changes between build -> test.
-  sed -i "s/HEAD/$(date -u +%FT%TZ)/g" cabal.project.local
+if [[ "$GHC_VERSION" == 9.*.*.* ]]; then
+  echo "
+   repository head.hackage.ghc.haskell.org
+   url: https://ghc.gitlab.haskell.org/head.hackage/
+   secure: True
+   key-threshold: 3
+   root-keys:
+       7541f32a4ccca4f97aea3b22f5e593ba2c0267546016b992dfadcd2fe944e55d
+       26021a13b401500c8eb2761ca95c61f2d625bfef951b939a8124ed12ecf07329
+       f76d08be13e9a61a377a85e2fb63f4c5435d40f8feb3e12eb05905edb8cdea89
+  " >> cabal.project.local
 fi
 
 cat cabal.project.local

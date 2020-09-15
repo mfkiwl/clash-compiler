@@ -47,6 +47,7 @@ module Clash.Core.VarEnv
     -- ** Modification
   , delVarSetByKey
   , unionVarSet
+  , differenceVarSet
     -- ** Working with predicates
     -- *** Searching
   , elemVarSet
@@ -294,6 +295,13 @@ unionVarSet
   -> VarSet
 unionVarSet = unionUniqSet
 
+-- | Difference of two sets
+differenceVarSet
+  :: VarSet
+  -> VarSet
+  -> VarSet
+differenceVarSet = differenceUniqSet
+
 -- | Is the variable an element in the set
 elemVarSet
   :: Var a
@@ -455,12 +463,12 @@ uniqAway' inScopeTest n u =
  where
   origUniq = getUnique u
   try k
-    | debugIsOn && k > 1000
-    = pprPanic "uniqAway loop:" msg
+--  | debugIsOn && k > 1000
+--  = pprPanic "uniqAway loop:" msg
     | inScopeTest uniq
     = try (k + 1)
-    | k > 3
-    = pprTraceDebug "uniqAway:" msg (setUnique u uniq)
+--  | k > 3
+--  = pprTraceDebug "uniqAway:" msg (setUnique u uniq)
     | otherwise
     = setUnique u uniq
     where
