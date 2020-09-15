@@ -947,11 +947,12 @@ unSimIO tcm arg =
   let argTy = termType tcm arg
   in  case tyView argTy of
         TyConApp _ [tcArg] ->
-          mkApps (Prim ( PrimInfo
-                           "Clash.Explicit.SimIO.unSimIO#"
-                           (mkFunTy argTy tcArg)
-                           WorkNever
-                           SingleResult ))
+          mkApps (Prim (PrimInfo
+                          "Clash.Explicit.SimIO.unSimIO#"
+                          (mkFunTy argTy tcArg)
+                          WorkNever
+                          SingleResult
+                          Nothing))
                  [Left arg]
         _ -> error ("internal error:\n" ++ showPpr arg)
 

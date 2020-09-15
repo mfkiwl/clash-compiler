@@ -2982,7 +2982,7 @@ xOptimize (TransformContext is0 _) e@(Case subj ty alts) = do
 
     case defPart of
       ([], _)    -> return e
-      (_, [])    -> changed (Prim (PrimInfo "Clash.XException.errorX" ty WorkConstant SingleResult))
+      (_, [])    -> changed (Prim (PrimInfo "Clash.XException.errorX" ty WorkConstant SingleResult Nothing))
       (_, [alt]) -> xOptimizeSingle is0 subj alt
       (_, defs)  -> xOptimizeMany is0 subj ty defs
   else
