@@ -119,6 +119,12 @@ stepPrim pInfo m tcm
         []  -> ghcPrimStep tcm (forcePrims m) pInfo [] [] m
         tys -> newBinder tys (Prim pInfo) m tcm
 
+stepMultiPrim :: PrimInfo -> Step
+stepMultiPrim pInfo m tcm =
+  case fst $ splitFunForallTy (multiPrimType pInfo) of
+    []  -> Nothing -- don't evaluate multi prims
+    tys -> newBinder tys (MultiPrim pInfo) m tcm
+
 stepLam :: Id -> Term -> Step
 stepLam x e = ghcUnwind (Lambda x e)
 
@@ -234,6 +240,7 @@ ghcStep m = case mTerm m of
   Data dc -> stepData dc m
   Literal l -> stepLiteral l m
   Prim p -> stepPrim p m
+  MultiPrim p -> stepMultiPrim p m
   Lam v x -> stepLam v x m
   TyLam v x -> stepTyLam v x m
   App x y -> stepApp x y m
@@ -456,4 +463,3 @@ letSubst h acc id0 =
    where
     (i,ids') = freshId ids
     x'       = modifyVarName (`setUnique` i) x
-

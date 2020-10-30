@@ -131,6 +131,7 @@ findAccidentialShadows =
     Data {}     -> []
     Literal {}  -> []
     Prim {}     -> []
+    MultiPrim _ -> []
     Lam _ t     -> findAccidentialShadows t
     TyLam _ t   -> findAccidentialShadows t
     App t1 t2   -> concatMap findAccidentialShadows [t1, t2]
@@ -1133,4 +1134,3 @@ removeUnusedBinders binds body =
                           (extendVarEnv x (x,e0) env)
                           (eltsVarSet eFVs)
         Nothing -> env
-

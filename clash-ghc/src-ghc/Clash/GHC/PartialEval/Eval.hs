@@ -52,6 +52,7 @@ eval = \case
   Literal lit     -> pure (VLiteral lit)
   Data dc         -> evalData dc
   Prim pr         -> evalPrim pr
+  MultiPrim pr    -> evalMultiPrim pr
   Lam i x         -> evalLam i x
   TyLam i x       -> evalTyLam i x
   App x y         -> evalApp x (Left y)
@@ -155,6 +156,15 @@ evalPrim pr
   | otherwise =
       etaExpand (Prim pr) >>= eval
 
+-- TODO Implement evaluation for multi return primitives
+evalMultiPrim :: PrimInfo -> Eval Value
+evalMultiPrim pr
+  | fullyApplied (primType pr) [] =
+      pure (VNeutral (NeMultiPrim pr []))
+
+  | otherwise =
+      etaExpand (MultiPrim pr) >>= eval
+
 -- TODO Hook up to primitive evaluation skeleton
 evalPrimOp :: PrimInfo -> Args Value -> Eval Value
 evalPrimOp pr args = pure (VNeutral (NePrim pr args))
@@ -230,6 +240,15 @@ evalApp x y
         rArgThunks <- delayArgs rArgs
 
         foldM applyArg primRes rArgThunks
+
+  | MultiPrim pr <- f
+  , prArgs <- fst $ splitFunForallTy (primType pr)
+  , numArgs <- length prArgs
+  = case compare (length args) numArgs of
+      LT -> etaExpand term >>= eval
+      _  -> do
+        argThunks <- delayArgs args
+        pure (VNeutral (NeMultiPrim pr argThunks))
 
   | otherwise
   = preserveFuel $ do

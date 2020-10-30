@@ -238,6 +238,7 @@ instance PrettyPrec Term where
     Data dc         -> pprPrec prec dc
     Literal l       -> pprPrec prec l
     Prim p          -> pprPrecPrim prec (primName p)
+    MultiPrim p     -> pprPrecPrim prec ("multi$" <> primName p)
     Lam  v e1       -> annotate (AnnContext $ LamBody v) <$>
                          pprPrecLam prec [v] e1
     TyLam tv e1     -> annotate (AnnContext $ TyLamBody tv) <$>

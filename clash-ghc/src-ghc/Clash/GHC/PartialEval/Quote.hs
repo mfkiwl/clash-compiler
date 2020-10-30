@@ -39,6 +39,7 @@ quoteNeutral :: Neutral Value -> Eval (Neutral Normal)
 quoteNeutral = \case
   NeVar i -> pure (NeVar i)
   NePrim pr args -> quoteNePrim pr args
+  NeMultiPrim pr args -> quoteNeMultiPrim pr args
   NeApp x y -> quoteNeApp x y
   NeTyApp x ty -> quoteNeTyApp x ty
   NeLetrec bs x -> quoteNeLetrec bs x
@@ -83,6 +84,9 @@ quoteThunk x env = setLocalEnv env (eval x >>= quote)
 
 quoteNePrim :: PrimInfo -> Args Value -> Eval (Neutral Normal)
 quoteNePrim pr = fmap (NePrim pr) . quoteArgs
+
+quoteNeMultiPrim :: PrimInfo -> Args Value -> Eval (Neutral Normal)
+quoteNeMultiPrim pr = fmap (NeMultiPrim pr) . quoteArgs
 
 quoteNeApp :: Neutral Value -> Value -> Eval (Neutral Normal)
 quoteNeApp x y = NeApp <$> quoteNeutral x <*> quote y

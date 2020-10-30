@@ -915,18 +915,19 @@ acmpTerm' inScope = go (mkRnEnv inScope)
 
   getRank :: Term -> Word
   getRank = \case
-    Var {}     -> 0
-    Data {}    -> 1
-    Literal {} -> 2
-    Prim {}    -> 3
-    Cast {}    -> 4
-    App {}     -> 5
-    TyApp {}   -> 6
-    Lam {}     -> 7
-    TyLam {}   -> 8
-    Letrec {}  -> 9
-    Case {}    -> 10
-    Tick {}    -> 11
+    Var {}      -> 0
+    Data {}     -> 1
+    Literal {}  -> 2
+    Prim {}     -> 3
+    Cast {}     -> 4
+    App {}      -> 5
+    TyApp {}    -> 6
+    Lam {}      -> 7
+    TyLam {}    -> 8
+    Letrec {}   -> 9
+    Case {}     -> 10
+    Tick {}     -> 11
+    MultiPrim _ -> 12
 
 thenCompare :: Ordering -> Ordering -> Ordering
 thenCompare EQ rel = rel

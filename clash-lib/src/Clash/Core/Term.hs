@@ -35,6 +35,7 @@ module Clash.Core.Term
   , partitionTicks
   , NameMod (..)
   , PrimInfo (..)
+  , MultiPrimInfo (..)
   , WorkInfo (..)
   , CoreContext (..)
   , Context
@@ -74,19 +75,37 @@ import Clash.Util                              (curLoc)
 
 -- | Term representation in the CoreHW language: System F + LetRec + Case
 data Term
-  = Var     !Id                             -- ^ Variable reference
-  | Data    !DataCon                        -- ^ Datatype constructor
-  | Literal !Literal                        -- ^ Literal
-  | Prim    !PrimInfo                       -- ^ Primitive
-  | Lam     !Id Term                        -- ^ Term-abstraction
-  | TyLam   !TyVar Term                     -- ^ Type-abstraction
-  | App     !Term !Term                     -- ^ Application
-  | TyApp   !Term !Type                     -- ^ Type-application
-  | Letrec  [LetBinding] Term               -- ^ Recursive let-binding
-  | Case    !Term !Type [Alt]               -- ^ Case-expression: subject, type of
-                                            -- alternatives, list of alternatives
-  | Cast    !Term !Type !Type               -- ^ Cast a term from one type to another
-  | Tick    !TickInfo !Term                 -- ^ Annotated term
+  = Var !Id
+  -- ^ Variable reference
+  | Data !DataCon
+  -- ^ Datatype constructor
+  | Literal !Literal
+  -- ^ Literal
+  | Prim !PrimInfo
+  -- ^ Primitive
+  | MultiPrim !PrimInfo
+  -- ^ Primitive with multiple return values. Useful for primitives that cannot
+  -- return their results as a single product type, due to limitation of
+  -- synthesis tooling. It will be applied to its normal arguments, followed by
+  -- the variables it should assign its results to.
+  --
+  -- See: 'Clash.Normalize.Transformations.setupMultiResultPrim'
+  | Lam !Id Term
+  -- ^ Term-abstraction
+  | TyLam !TyVar Term
+  -- ^ Type-abstraction
+  | App !Term !Term
+  -- ^ Application
+  | TyApp !Term !Type
+  -- ^ Type-application
+  | Letrec [LetBinding] Term
+  -- ^ Recursive let-binding
+  | Case !Term !Type [Alt]
+  -- ^ Case-expression: subject, type of alternatives, list of alternatives
+  | Cast !Term !Type !Type
+  -- ^ Cast a term from one type to another
+  | Tick !TickInfo !Term
+  -- ^ Annotated term
   deriving (Show,Generic,NFData,Hashable,Binary)
 
 data TickInfo
@@ -119,6 +138,12 @@ data PrimInfo = PrimInfo
   , primType     :: !Type
   , primWorkInfo :: !WorkInfo
   } deriving (Show,Generic,NFData,Hashable,Binary)
+
+data MultiPrimInfo = MultiPrimInfo
+  { mpi_primInfo :: PrimInfo
+  , mpi_resultDc :: DataCon
+  , mpi_resultTypes :: [Type]
+  }
 
 data WorkInfo
   = WorkConstant
@@ -321,6 +346,7 @@ walkTerm f = catMaybes . DList.toList . go
     Data _ -> mempty
     Literal _ -> mempty
     Prim _ -> mempty
+    MultiPrim _ -> mempty
     Lam _ t1 -> go t1
     TyLam _ t1 -> go t1
     App t1 t2 -> go t1 <> go t2
@@ -342,6 +368,7 @@ collectTermIds = concat . walkTerm (Just . go)
   go (Data _) = []
   go (Literal _) = []
   go (Prim _) = []
+  go (MultiPrim _) = []
   go (TyLam _ _) = []
   go (App _ _) = []
   go (TyApp _ _) = []
@@ -362,4 +389,3 @@ idToVar tv        = error $ $(curLoc) ++ "idToVar: tyVar: " ++ show tv
 varToId :: Term -> Id
 varToId (Var i) = i
 varToId e       = error $ $(curLoc) ++ "varToId: not a var: " ++ show e
-

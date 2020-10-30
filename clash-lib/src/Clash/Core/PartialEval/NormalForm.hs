@@ -69,12 +69,13 @@ type Arg a
 -- let ... in ... Preserved bindings are needed by the body
 --
 data Neutral a
-  = NeVar    !Id
-  | NePrim   !PrimInfo !(Args a)
-  | NeApp    !(Neutral a) !a
-  | NeTyApp  !(Neutral a) !Type
+  = NeVar !Id
+  | NePrim !PrimInfo !(Args a)
+  | NeMultiPrim !PrimInfo !(Args a)
+  | NeApp !(Neutral a) !a
+  | NeTyApp !(Neutral a) !Type
   | NeLetrec ![(Id, a)] !a
-  | NeCase   !a !Type ![(Pat, a)]
+  | NeCase !a !Type ![(Pat, a)]
   deriving (Show)
 
 -- | A term which has been potentially evaluated to WHNF. If evaluation has

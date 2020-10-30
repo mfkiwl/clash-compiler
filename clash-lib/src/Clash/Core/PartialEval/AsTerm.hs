@@ -35,6 +35,7 @@ instance (AsTerm a) => AsTerm (Neutral a) where
   asTerm = \case
     NeVar i -> Var i
     NePrim pr args -> mkApps (Prim pr) (argsToTerms args)
+    NeMultiPrim pr args -> mkApps (MultiPrim pr) (argsToTerms args)
     NeApp x y -> App (asTerm x) (asTerm y)
     NeTyApp x ty -> TyApp (asTerm x) ty
     NeLetrec bs x ->
@@ -82,4 +83,3 @@ argsToTerms = fmap $ first asTerm
 
 altsToTerms :: (AsTerm a) => [(Pat, a)] -> [Alt]
 altsToTerms = fmap $ second asTerm
-
