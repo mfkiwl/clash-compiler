@@ -108,5 +108,5 @@ i2cSlave
   :: Clock System
   -> Signal System ACConfTestI
   -> Signal System ACConfTestO
-i2cSlave clk = mealyIO clk i2cSlaveT (reg i2cSlaveInit)
-{-# NOINLINE i2cSlave #-}
+i2cSlave clk _ = pure (0, repeat 0)
+{-# INLINE i2cSlave #-}

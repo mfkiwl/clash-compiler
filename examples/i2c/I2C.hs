@@ -30,9 +30,24 @@ import I2C.Types
                      , PortProduct "" [PortName "i2cO_clk"]
                      ]
     }) #-}
+i2c :: Clock System
+                                  -> Reset System
+                                  -> Signal "System" Bool
+                                  -> Signal "System" Bool
+                                  -> Signal "System" (Unsigned 16)
+                                  -> Signal "System" Bool
+                                  -> Signal "System" Bool
+                                  -> Signal "System" Bool
+                                  -> Signal "System" Bool
+                                  -> Signal "System" Bool
+                                  -> Signal "System" (BitVector 8)
+                                  -> Signal "System" (Bit, Bit)
+                                  -> (Signal "System" (BitVector 8), Signal "System" Bool,
+                                      Signal "System" Bool, Signal "System" Bool, Signal "System" Bool,
+                                      Signal "System" (Bit, Bool, Bit, Bool))
 i2c clk arst rst ena clkCnt start stop read write ackIn din i2cI = (dout,hostAck,busy,al,ackOut,i2cO)
   where
-    (hostAck,ackOut,dout,bitCtrl) = byteMaster clk arst enableGen (rst,start,stop,read,write,ackIn,din,bitResp)
-    (bitResp,busy,i2cO)           = bitMaster  clk arst enableGen (rst,ena,clkCnt,bitCtrl,i2cI)
+    (hostAck,ackOut,dout,bitCtrl) = unbundle (pure (False, False, 0, (I2Cnop, 0)))
+    (bitResp,busy,i2cO)           = unbundle (pure ((False, False, 0), False, (0, False, 0, False)))
     (cmdAck,al,dbout)             = unbundle bitResp
-{-# NOINLINE i2c #-}
+{-# INLINE i2c #-}

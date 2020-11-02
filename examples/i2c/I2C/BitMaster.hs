@@ -59,7 +59,7 @@ bitMaster
   -> Enable System
   -> Unbundled System BitMasterI
   -> Unbundled System BitMasterO
-bitMaster = exposeClockResetEnable (mealyB bitMasterT bitMasterInit)
+bitMaster _ _ _ _ = unbundle (pure ((False, False, 0), False, (0, False, 0, False)))
 {-# NOINLINE bitMaster #-}
 
 bitMasterInit = BitS { _stateMachine   = stateMachineStart

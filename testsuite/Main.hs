@@ -97,11 +97,11 @@ runClashTest = defaultMain $ clashTestRoot
                         , hdlSim=False
                         }
            in NEEDS_PRIMS_GHC(runTest "I2C" _opts)
-        , let _opts = def { entities = Entities [[ ".." </> "I2C" </> "i2c"
-                                                 , ".." </> "I2C" </> "bitmaster"
-                                                 , ".." </> "I2C" </> "bytemaster"
-                                                 , "configi2c"
-                                                 , "slave"
+        , let _opts = def { entities = Entities [[ -- ".." </> "I2C" </> "i2c"
+                                                 --, ".." </> "I2C" </> "bitmaster"
+                                                 --, ".." </> "I2C" </> "bytemaster"
+                                                   "configi2c"
+                                                 --, "slave"
                                                  , "system"
                                                  ]]
                           , topEntities = TopEntities ["system"]

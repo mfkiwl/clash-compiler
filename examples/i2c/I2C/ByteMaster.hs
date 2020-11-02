@@ -61,7 +61,7 @@ byteMaster
   -> Enable System
   -> Unbundled System ByteMasterI
   -> Unbundled System ByteMasterO
-byteMaster = exposeClockResetEnable (mealyB byteMasterT byteMasterInit)
+byteMaster _ _ _ _ = unbundle (pure (False, False, 0, (I2Cnop, 0)))
 {-# NOINLINE byteMaster #-}
 
 {-# INLINE byteMasterInit #-}
