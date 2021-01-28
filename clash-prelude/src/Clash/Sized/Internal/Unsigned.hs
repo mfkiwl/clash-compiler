@@ -127,7 +127,7 @@ import Test.QuickCheck.Arbitrary      (Arbitrary (..), CoArbitrary (..),
 
 import Clash.Class.BitPack            (BitPack (..), packXWith, bitCoerce)
 import Clash.Class.Num                (ExtendingNum (..), SaturatingNum (..),
-                                       SaturationMode (..))
+                                       SaturationMode (..), SatError(..))
 import Clash.Class.Parity             (Parity (..))
 import Clash.Class.Resize             (Resize (..))
 import Clash.Prelude.BitIndex         ((!), msb, replaceBit, split)
@@ -610,6 +610,18 @@ decUnsigned n = appT (conT ''Unsigned) (litT $ numTyLit (integerFromNatural n))
 decUnsigned :: Integer -> TypeQ
 decUnsigned n = appT (conT ''Unsigned) (litT $ numTyLit n)
 #endif
+
+instance KnownNat n => SatError (Unsigned n) where
+  satAddError a b =
+    let r = plus# a b
+    in  case msb r of
+          0 -> resize# r
+          _ -> error $ "satAddError " ++ show a ++ " + " ++ show b
+  satSubError a b =
+    let r = minus# a b
+    in  case msb r of
+          0 -> resize# r
+          _ -> error $ "satSubError " ++ show a ++ " - " ++ show b
 
 instance KnownNat n => SaturatingNum (Unsigned n) where
   satAdd SatWrap a b = a +# b

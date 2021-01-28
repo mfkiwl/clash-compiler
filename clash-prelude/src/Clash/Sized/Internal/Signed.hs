@@ -116,7 +116,7 @@ import Test.QuickCheck.Arbitrary      (Arbitrary (..), CoArbitrary (..),
 
 import Clash.Class.BitPack            (BitPack (..), packXWith)
 import Clash.Class.Num                (ExtendingNum (..), SaturatingNum (..),
-                                       SaturationMode (..))
+                                       SaturationMode (..), SatError(..))
 import Clash.Class.Parity             (Parity (..))
 import Clash.Class.Resize             (Resize (..))
 import Clash.Prelude.BitIndex         ((!), msb, replaceBit, split)
@@ -626,6 +626,20 @@ decSigned :: Quote m => Integer -> m Type
 decSigned :: Integer -> TypeQ
 #endif
 decSigned n = appT (conT ''Signed) (litT $ numTyLit n)
+
+instance KnownNat n => SatError (Signed n) where
+  satAddError a b =
+    let r      = plus# a b
+        (_,r') = split r
+    in  case msb r `xor` msb r' of
+          0 -> unpack# r'
+          _ -> error $ "satAddError " ++ show a ++ " + " ++ show b
+  satSubError a b =
+    let r      = minus# a b
+        (_,r') = split r
+    in  case msb r `xor` msb r' of
+          0 -> unpack# r'
+          _ -> error $ "satSubError " ++ show a ++ " - " ++ show b
 
 instance KnownNat n => SaturatingNum (Signed n) where
   satAdd SatWrap  a b = a +# b

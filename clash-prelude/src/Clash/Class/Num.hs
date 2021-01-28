@@ -17,6 +17,7 @@ module Clash.Class.Num
     -- * Saturating arithmetic functions
   , SaturationMode (..)
   , SaturatingNum (..)
+  , SatError (..)
   , boundedAdd
   , boundedSub
   , boundedMul
@@ -90,3 +91,7 @@ boundedSub = satSub SatBound
 boundedMul :: SaturatingNum a => a -> a -> a
 boundedMul = satMul SatBound
 {-# INLINE boundedMul #-}
+
+class (Bounded a, Num a) => SatError a where
+  satAddError :: a -> a -> a
+  satSubError :: a -> a -> a

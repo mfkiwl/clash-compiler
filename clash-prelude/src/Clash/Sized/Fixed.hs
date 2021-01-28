@@ -139,7 +139,7 @@ import Test.QuickCheck            (Arbitrary, CoArbitrary)
 import Clash.Class.BitPack        (BitPack (..))
 import Clash.Class.Num            (ExtendingNum (..), SaturatingNum (..),
                                    SaturationMode (..), boundedAdd, boundedSub,
-                                   boundedMul)
+                                   boundedMul, SatError(..))
 import Clash.Class.Resize         (Resize (..))
 import Clash.Promoted.Nat         (SNat, natToNum, natToInteger)
 import Clash.Prelude.BitIndex     (lsb, msb, split)
@@ -487,6 +487,7 @@ instance ENumFixedC rep int1 frac1 int2 frac2 =>
 -- | Constraint for the 'Num' instance of 'Fixed'
 type NumFixedC rep int frac
   = ( SaturatingNum (rep (int + frac))
+    , SatError (rep (int + frac))
     , ExtendingNum (rep (int + frac)) (rep (int + frac))
     , MResult (rep (int + frac)) (rep (int + frac)) ~
               rep ((int + int) + (frac + frac))
@@ -1080,6 +1081,9 @@ enumFromThenToDown x1 x2 y
   !isHalf = lsb delta == 1
   !isMinusHalf = lsb x1 == 0 && lsb x2 == 1
 
+instance NumFixedC rep int frac => SatError (Fixed rep int frac) where
+  satAddError (Fixed a) (Fixed b) = Fixed (satAddError a b)
+  satSubError (Fixed a) (Fixed b) = Fixed (satSubError a b)
 
 instance NumFixedC rep int frac => SaturatingNum (Fixed rep int frac) where
   satAdd w (Fixed a) (Fixed b) = Fixed (satAdd w a b)
