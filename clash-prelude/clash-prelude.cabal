@@ -407,24 +407,24 @@ test-suite unittests
       build-depends: mmorph <1.1.3
 
   Other-Modules:
-                 Clash.Tests.AutoReg
-                 Clash.Tests.BitPack
-                 Clash.Tests.BitVector
-                 Clash.Tests.DerivingDataRepr
-                 Clash.Tests.DerivingDataReprTypes
+                 -- Clash.Tests.AutoReg
+                 -- Clash.Tests.BitPack
+                 -- Clash.Tests.BitVector
+                 -- Clash.Tests.DerivingDataRepr
+                 -- Clash.Tests.DerivingDataReprTypes
                  Clash.Tests.Fixed
                  Clash.Tests.FixedExhaustive
-                 Clash.Tests.NFDataX
-                 Clash.Tests.Reset
-                 Clash.Tests.Resize
-                 Clash.Tests.Signal
-                 Clash.Tests.Signed
-                 Clash.Tests.SizedNum
-                 Clash.Tests.TopEntityGeneration
-                 Clash.Tests.Unsigned
+                 -- Clash.Tests.NFDataX
+                 -- Clash.Tests.Reset
+                 -- Clash.Tests.Resize
+                 -- Clash.Tests.Signal
+                 -- Clash.Tests.Signed
+                 -- Clash.Tests.SizedNum
+                 -- Clash.Tests.TopEntityGeneration
+                 -- Clash.Tests.Unsigned
 
-                 Clash.Tests.Laws.Enum
-                 Clash.Tests.Laws.SaturatingNum
+                 -- Clash.Tests.Laws.Enum
+                 -- Clash.Tests.Laws.SaturatingNum
 
                  Hedgehog.Extra
 
