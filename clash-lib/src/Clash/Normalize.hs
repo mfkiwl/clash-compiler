@@ -140,6 +140,7 @@ runNormalization opts supply globals typeTrans reprs tcm tupTcm eval primMap rcs
 
     rwState   = RewriteState
                   0
+                  mempty       -- transformCounters Map
                   globals
                   supply
                   (error $ $(curLoc) ++ "Report as bug: no curFun",noSrcSpan)
