@@ -1032,7 +1032,7 @@ enumFromThenToUp x1 x2 y
                   [x1, x2]
                 else
                   [x1]
-  | otherwise = let !y' = satSub SatWrap y (delta `shiftR` 1) -- Does wrap
+  | otherwise = let !y' = satSubError y (delta `shiftR` 1) -- Does wrap
                     go_up x
                       | x' < x            = [x]
                       | isHalf && x >= y' = [x]
