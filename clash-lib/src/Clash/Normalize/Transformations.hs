@@ -434,9 +434,12 @@ inlineNonRep _ e@(Case scrut altsTy alts)
     isInlined <- zoomExtra (alreadyInlined f cf)
     limit     <- Lens.use (extra.inlineLimit)
     tcm       <- Lens.view tcCache
-    let scrutTy = termType tcm scrut
-        noException = not (exception tcm scrutTy)
-    if noException && (Maybe.fromMaybe 0 isInlined) > limit
+    let
+      scrutTy = termType tcm scrut
+
+      -- Constraint dictionary inlining always terminates, so we ig
+      notClassTy = not (isClassTy tcm scrutTy)
+    if notClassTy && (Maybe.fromMaybe 0 isInlined) > limit
       then
         trace (concat [ $(curLoc) ++ "InlineNonRep: " ++ showPpr (varName f)
                       ," already inlined " ++ show limit ++ " times in:"
@@ -458,7 +461,7 @@ inlineNonRep _ e@(Case scrut altsTy alts)
                                                   <*> pure scrutTy)
         case (nonRepScrut, bodyMaybe) of
           (True,Just b) -> do
-            Monad.when noException (zoomExtra (addNewInline f cf))
+            Monad.when notClassTy (zoomExtra (addNewInline f cf))
 
             let scrutBody0 = mkTicks (bindingTerm b) (mkInlineTick f : ticks)
             let scrutBody1 = mkApps scrutBody0 args
@@ -466,8 +469,6 @@ inlineNonRep _ e@(Case scrut altsTy alts)
             changed $ Case scrutBody1 altsTy alts
 
           _ -> return e
-  where
-    exception = isClassTy
 
 inlineNonRep _ e = return e
 {-# SCC inlineNonRep #-}
