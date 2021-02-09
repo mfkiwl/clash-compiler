@@ -1,3 +1,4 @@
+{-# LANGUAGE NamedFieldPuns #-}
 {-|
   Copyright  :  (C) 2012-2016, University of Twente,
                     2016     , Myrtle Software Ltd,
@@ -732,31 +733,27 @@ cloneNameWithBindingMap binders nm = do
 {-# INLINE isUntranslatable #-}
 -- | Determine if a term cannot be represented in hardware
 isUntranslatable
-  :: Bool
+  :: (Monad m, HasRewriteEnv m)
+  => Bool
   -- ^ String representable
   -> Term
-  -> RewriteMonad extra Bool
+  -> m Bool
 isUntranslatable stringRepresentable tm = do
-  tcm <- Lens.view tcCache
-  not <$> (representableType <$> Lens.view typeTranslator
-                             <*> Lens.view customReprs
-                             <*> pure stringRepresentable
-                             <*> pure tcm
-                             <*> pure (termType tcm tm))
-
+  RewriteEnv{_tcCache} <- getRewriteEnv
+  isUntranslatableType stringRepresentable (termType _tcCache tm)
 {-# INLINE isUntranslatableType #-}
+
 -- | Determine if a type cannot be represented in hardware
 isUntranslatableType
-  :: Bool
+  :: (Monad m, HasRewriteEnv m)
+  => Bool
   -- ^ String representable
   -> Type
-  -> RewriteMonad extra Bool
-isUntranslatableType stringRepresentable ty =
-  not <$> (representableType <$> Lens.view typeTranslator
-                             <*> Lens.view customReprs
-                             <*> pure stringRepresentable
-                             <*> Lens.view tcCache
-                             <*> pure ty)
+  -> m Bool
+isUntranslatableType stringRepresentable ty = do
+  RewriteEnv{_typeTranslator,_customReprs,_tcCache} <- getRewriteEnv
+  pure (not (representableType _typeTranslator _customReprs
+                               stringRepresentable _tcCache ty))
 
 -- | Make a binder that should not be referenced
 mkWildValBinder

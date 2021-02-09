@@ -28,6 +28,8 @@ import Control.Monad.Fix                     (MonadFix (..), fix)
 import Control.Monad.Reader                  (MonadReader (..))
 import Control.Monad.State                   (MonadState (..))
 import Control.Monad.State.Strict            (State)
+import qualified Control.Monad.State.Strict  as StrictState
+import qualified Control.Monad.State.Lazy    as LazyState
 import Control.Monad.Writer                  (MonadWriter (..))
 import Data.Binary                           (Binary)
 import Data.Hashable                         (Hashable)
@@ -136,6 +138,18 @@ data RewriteEnv
   }
 
 makeLenses ''RewriteEnv
+
+class HasRewriteEnv m where
+  getRewriteEnv :: m RewriteEnv
+
+instance HasRewriteEnv (RewriteMonad extra) where
+  getRewriteEnv = R $ \e s w -> (e, s, w)
+
+instance HasRewriteEnv (StrictState.StateT s (RewriteMonad extra)) where
+  getRewriteEnv = StrictState.lift getRewriteEnv
+
+instance HasRewriteEnv (LazyState.StateT s (RewriteMonad extra)) where
+  getRewriteEnv = LazyState.lift getRewriteEnv
 
 -- | Monad that keeps track how many transformations have been applied and can
 -- generate fresh variables and unique identifiers. In addition, it keeps track

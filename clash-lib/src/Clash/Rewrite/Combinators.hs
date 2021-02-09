@@ -30,11 +30,12 @@ import           Clash.Core.Term             (Term (..), CoreContext (..), primA
 import           Clash.Core.VarEnv
   (extendInScopeSet, extendInScopeSetList)
 import           Clash.Rewrite.Types
+import Clash.Rewrite.Util (isUntranslatable)
 
 -- | Apply a transformation on the subtrees of an term
 allR
   :: forall m
-   . Monad m
+   . (Monad m, HasRewriteEnv m)
   => Transform m
   -- ^ The transformation to apply to the subtrees
   -> Transform m
@@ -64,11 +65,13 @@ allR trans (TransformContext is c) (Letrec xes e) = do
   is'                = extendInScopeSetList is (map fst xes)
   rewriteBind (b,e') = (b,) <$> trans (TransformContext is' (LetBinding b bndrs:c)) e'
 
-allR trans (TransformContext is c) (Case scrut ty alts) =
-  Case <$> trans (TransformContext is (CaseScrut:c)) scrut
-       <*> pure ty
-       <*> traverse rewriteAlt alts
+allR trans (TransformContext is c) (Case scrut ty alts) = do
+  scrutUntranslatable <- isUntranslatable True scrut
+  Case <$> newScrut <*> pure ty <*> if scrutUntranslatable then pure alts else newAlts
  where
+  newScrut = trans (TransformContext is (CaseScrut:c)) scrut
+  newAlts = traverse rewriteAlt alts
+
   rewriteAlt (p,e) =
     let (tvs,ids) = patIds p
         is'       = extendInScopeSetList (extendInScopeSetList is tvs) ids
@@ -122,7 +125,7 @@ topdownR :: Rewrite m -> Rewrite m
 topdownR r = repeatR r >-> allR (topdownR r)
 
 -- | Apply a transformation in a bottomup traversal
-bottomupR :: Monad m => Transform m -> Transform m
+bottomupR :: (HasRewriteEnv m, Monad m) => Transform m -> Transform m
 bottomupR r = allR (bottomupR r) >-> r
 
 infixr 5 !->
@@ -162,7 +165,7 @@ whenR f r1 ctx expr = do
 
 -- | Only traverse downwards when the assertion evaluates to true
 bottomupWhenR
-  :: Monad m
+  :: (HasRewriteEnv m, Monad m)
   => (TransformContext -> Term -> m Bool)
   -> Transform m
   -> Transform m
