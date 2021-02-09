@@ -253,10 +253,11 @@ instance PrettyPrec Term where
     Letrec xes e1   -> pprPrecLetrec prec xes e1
     Case e' _ alts  -> pprPrecCase prec e' alts
     Cast e' ty1 ty2 -> pprPrecCast prec e' ty1 ty2
-    Tick t e'       -> do
-      tDoc <- pprPrec prec t
-      eDoc <- pprPrec prec e'
-      return (tDoc <> line' <> eDoc)
+    Tick _ e       -> pprPrec prec e
+    -- Tick t e'       -> do
+    --   tDoc <- pprPrec prec t
+    --   eDoc <- pprPrec prec e'
+    --   return (tDoc <> line' <> eDoc)
 
 instance PrettyPrec TickInfo where
   pprPrec prec (SrcSpan sp)   = pprPrec prec sp
