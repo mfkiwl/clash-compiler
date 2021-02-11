@@ -51,6 +51,8 @@ module Clash.Unique
     -- * UniqSet
   , UniqSet
     -- ** Accessors
+    -- *** Size information
+  , nullUniqSet
     -- *** Indexing
   , lookupUniqSet
     -- ** Construction
@@ -59,6 +61,7 @@ module Clash.Unique
     -- ** Modifications
   , extendUniqSet
   , unionUniqSet
+  , delUniqSet
   , delUniqSetDirectly
     -- ** Working with predicates
     -- *** Searching
@@ -326,6 +329,10 @@ emptyUniqSet
   :: UniqSet a
 emptyUniqSet = UniqSet IntMap.empty
 
+-- | Is the set empty?
+nullUniqSet :: UniqSet a -> Bool
+nullUniqSet (UniqSet m) = IntMap.null m
+
 -- | Set with a single element
 unitUniqSet
   :: Uniquable a
@@ -379,6 +386,14 @@ lookupUniqSet
   -> UniqSet b
   -> Maybe b
 lookupUniqSet a (UniqSet env) = IntMap.lookup (getUnique a) env
+
+-- | Remove an element based on the `Unique` it contains
+delUniqSet
+  :: Uniquable a
+  => a
+  -> UniqSet a
+  -> UniqSet a
+delUniqSet a = delUniqSetDirectly (getUnique a)
 
 -- | Remove an element based on the `Unique` it contains
 delUniqSetDirectly

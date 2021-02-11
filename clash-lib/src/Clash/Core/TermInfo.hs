@@ -46,7 +46,7 @@ termSize (Case subj _ alts) = sum (subjSz:altSzs)
   altSzs = map (termSize . snd) alts
 
 -- | Determine the type of a term
-termType :: TyConMap -> Term -> Type
+termType :: HasCallStack => TyConMap -> Term -> Type
 termType m e = case e of
   Var t          -> varType t
   Data dc        -> dcType dc
@@ -133,7 +133,8 @@ multiPrimInfo _ _ = Nothing
 
 -- | Get the result type of a polymorphic function given a list of arguments
 applyTypeToArgs
-  :: Term
+  :: HasCallStack
+  => Term
   -> TyConMap
   -> Type
   -> [Either Term Type]

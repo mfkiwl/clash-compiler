@@ -19,48 +19,49 @@
 {-# LANGUAGE TemplateHaskell #-}
 
 module Clash.Normalize.Transformations
-  ( caseLet
-  , caseCon
+  ( appPropFast
+  , argCastSpec
+  , bindConstantVar
   , caseCase
+  , caseCast
+  , caseCon
   , caseElemNonReachable
+  , caseFlat
+  , caseLet
+  , constantSpec
+  , deadCode
+  , dedupProjections
+  , disjointExpressionConsolidation
   , elemExistentials
+  , eliminateCastCast
+  , etaExpandSyn
+  , etaExpansionTL
+  , flattenLet
+  , inlineBndrsCleanup
+  , inlineCast
+  , inlineCleanup
+  , inlineHO
   , inlineNonRep
   , inlineOrLiftNonRep
-  , typeSpec
-  , nonRepSpec
-  , etaExpansionTL
-  , nonRepANF
-  , bindConstantVar
-  , constantSpec
-  , makeANF
-  , deadCode
-  , topLet
-  , recToLetRec
-  , inlineWorkFree
-  , inlineHO
+  , inlineSimIO
   , inlineSmall
-  , simpleCSE
+  , inlineWorkFree
+  , letCast
+  , makeANF
+  , nonRepANF
+  , nonRepSpec
+  , recToLetRec
   , reduceConst
   , reduceNonRepPrim
-  , caseFlat
-  , disjointExpressionConsolidation
   , removeUnusedExpr
-  , inlineCleanup
-  , inlineBndrsCleanup
-  , flattenLet
-  , splitCastWork
-  , inlineCast
-  , caseCast
-  , letCast
-  , eliminateCastCast
-  , argCastSpec
-  , etaExpandSyn
-  , appPropFast
   , separateArguments
   , separateLambda
-  , xOptimize
   , setupMultiResultPrim
-  , inlineSimIO
+  , simpleCSE
+  , splitCastWork
+  , topLet
+  , typeSpec
+  , xOptimize
   )
 where
 
@@ -77,7 +78,7 @@ import           Data.Coerce                 (coerce)
 import qualified Data.Either                 as Either
 import qualified Data.HashMap.Lazy           as HashMap
 import qualified Data.HashMap.Strict         as HashMapS
-import           Data.List                   ((\\))
+import           Data.List                   ((\\), foldl')
 import qualified Data.List                   as List
 import qualified Data.List.Extra             as List
 import qualified Data.Maybe                  as Maybe
@@ -111,13 +112,13 @@ import           Clash.Core.Pretty           (showPpr)
 import           Clash.Core.Subst
 import           Clash.Core.Term
 import           Clash.Core.TermInfo
-import           Clash.Core.Type             (Type (..), TypeView (..), applyFunTy,
-                                              isPolyFunCoreTy, isClassTy,
-                                              normalizeType, splitFunForallTy,
-                                              splitFunTy,
-                                              tyView, mkPolyFunTy, coreView,
-                                              LitTy (..), coreView1)
-import           Clash.Core.TyCon            (TyConMap, tyConDataCons)
+import           Clash.Core.Type
+  (Type (..), TypeView (..), applyFunTy, isPolyFunCoreTy, isClassTy,
+   normalizeType, splitFunForallTy, splitFunTy, tyView, mkPolyFunTy, coreView,
+   LitTy (..), coreView1)
+import           Clash.Core.TyCon
+  (TyConMap, tyConDataCons, isProductTypeTc, isGadtTc, AlgTyConRhs (DataTyCon, dataCons, NewTyCon),
+   algTcRhs, TyCon (AlgTyCon), dataCon)
 import           Clash.Core.Util
   ( isSignalType, mkVec, tyNatSize, undefinedTm,
    shouldSplit, inverseTopSortLetBindings)
@@ -129,7 +130,7 @@ import           Clash.Core.VarEnv
    notElemVarSet, unionVarEnvWith, unionInScope, unitVarEnv,
    unitVarSet, mkVarSet, mkInScopeSet, uniqAway, elemInScopeSet, elemVarEnv,
    foldlWithUniqueVarEnv', lookupVarEnvDirectly, extendVarEnv, unionVarEnv,
-   eltsVarEnv, mkVarEnv, elemUniqInScopeSet)
+   eltsVarEnv, mkVarEnv, elemUniqInScopeSet, delVarSet, delVarSetList, nullVarSet)
 import           Clash.Debug
 import           Clash.Driver.Types          (Binding(..), DebugLevel (..))
 import           Clash.Netlist.BlackBox.Types (Element(Err))
@@ -423,6 +424,251 @@ caseCase (TransformContext is0 _) e@(Case (stripTicks -> Case scrut alts1Ty alts
 caseCase _ e = return e
 {-# SCC caseCase #-}
 
+-- | Very roughly, this transformation turns the following:
+--
+-- @
+-- ( case ds of {Product f1 _ -> foo f1}
+-- , case ds of {Product _ f2 -> bar f2} )
+-- @
+--
+-- into:
+--
+-- @
+-- case ds of
+--   Product f1 f2 of
+--     (foo f1, bar f2)
+-- @
+--
+-- making sure work to evaluate /ds/ gets shared in later transformations.
+dedupProjections :: HasCallStack => NormRewrite
+dedupProjections (TransformContext inScope _) (Letrec bindings_ body0) = do
+  let
+    binders = map fst bindings_
+    terms0 = map snd bindings_
+
+  -- This is less than ideal. TODO: comment on missed cases
+  terms1 <- mapM (dedupProjectionsWorker inScope binders) terms0
+  body1 <- dedupProjectionsWorker inScope binders body0
+  pure (Letrec (zip binders terms1) body1)
+
+dedupProjections (TransformContext inScope _) (Case subj typ alts) =
+  fmap (Case subj typ) $ Monad.forM alts $ \(pat, body0) ->
+    case pat of
+      DataPat _ _ vars -> do
+        body1 <- dedupProjectionsWorker inScope vars body0
+        pure (pat, body1)
+      _ ->
+        pure (pat, body0)
+
+dedupProjections _ e = return e
+
+dedupProjectionsWorker ::
+  InScopeSet ->
+  [Id] ->
+  Term ->
+  RewriteMonad NormalizeState Term
+dedupProjectionsWorker inScope0 candidates0 term = do
+  tcm <- Lens.view tcCache
+
+  let
+    candidates1 = filter (isInteresting tcm . varType) candidates0
+    count0 = findProjectionsCheckEmpty (mkVarSet candidates1) mempty term
+
+    -- TODO: Use all project names to generate field names
+    found = HashMapS.toList
+          $ HashMapS.mapMaybe Maybe.listToMaybe
+          $ HashMapS.filter ((>1) . length)
+          $ count0
+
+    -- We'll need to generate completely fresh variables for the new projection
+    -- to prevent accidental shadowing.
+    inScope1 = extendInScopeSetList inScope0 candidates0
+    allIds = extendInScopeSetList inScope1 (collectTermIds term)
+
+  if null found
+  then return term
+  else changed =<< Monad.foldM (go tcm inScope1 allIds) term found
+
+ where
+  go tcm inScope allIds body0 (subj, fieldIds) = do
+    let dc = productDc tcm (varType subj)
+
+    newFieldRefs <-
+      Monad.zipWithM
+        (mkTmBinderFor allIds tcm)
+        (map varName fieldIds)
+        (map Var fieldIds)
+
+    let
+      body1 = replaceProjection subj newFieldRefs (extendInScopeSetList inScope newFieldRefs) body0
+      body2 = Case (Var subj) (termType tcm body0) [(DataPat dc [] newFieldRefs, body1)]
+
+    -- () <- traceM "ping!"
+    -- traceM "------1------"
+    -- traceM (showPpr body0)
+    -- traceM "------2------"
+    -- traceM (showPpr body2)
+
+    pure body2
+
+  -- We only handle non-GADT product types
+  isInteresting tcm typ = not (isGadt tcm typ) && isProductType tcm typ
+
+  -- Not sure how to handle GADTs, so we filter them for now
+  isGadt tcm typ =
+    case tyView typ of
+      TyConApp tcNm _
+        | Just tc <- lookupUniqMap tcNm tcm
+        -> isGadtTc tc
+      _ -> False
+
+  -- 'dedupProjections' only handles pure product types now. In the future it
+  -- could do more than that.
+  isProductType tcm typ =
+    case tyView typ of
+      TyConApp tcNm _
+        | Just tc <- lookupUniqMap tcNm tcm
+        -> isProductTypeTc tc
+      _ -> False
+
+  productDc tcm typ =
+    case tyView typ of
+      TyConApp tcNm _
+        | Just tc <- lookupUniqMap tcNm tcm
+        , (AlgTyCon{algTcRhs=DataTyCon{dataCons=[dc]}}) <- tc
+        -> dc
+        | Just tc <- lookupUniqMap tcNm tcm
+        , (AlgTyCon{algTcRhs=NewTyCon{dataCon}}) <- tc
+        -> dataCon
+      _ -> error ("Unexpected type:\n\n" <> showPpr typ)
+
+-- | Same as 'findProjections', but immediately returns if 'candidates' is empty
+findProjectionsCheckEmpty ::
+  HasCallStack =>
+
+  -- | Projections to look for
+  VarSet ->
+  -- | Projection count
+  HashMapS.HashMap Id [[Id]] ->
+  -- | Term to check for projections
+  Term ->
+  -- | Number of projections
+  HashMapS.HashMap Id [[Id]]
+findProjectionsCheckEmpty candidates count term
+  | nullVarSet candidates = count
+  | otherwise = findProjections candidates count term
+
+findProjections ::
+  HasCallStack =>
+
+  -- | Projections to look for
+  VarSet ->
+  -- | Projection count
+  HashMapS.HashMap Id [[Id]] ->
+  -- | Term to check for projections
+  Term ->
+  -- | Number of projections found
+  HashMapS.HashMap Id [[Id]]
+findProjections candidates0 count0 = \case
+  -- 'findProjections' walks a Term looking for projections on 'candidates0'. It
+  -- stops when all candidates have been shadowed or the whole term has been
+  -- traversed.
+  Lam v t ->
+    findProjectionsCheckEmpty (delVarSet v candidates0) count0 t
+
+  Letrec bindings_ t ->
+    let candidates1 = delVarSetList candidates0 (map fst bindings_) in
+    foldl' (findProjectionsCheckEmpty candidates1) count0 (t:map snd bindings_)
+
+  Case (stripTicks -> subj) _ alts ->
+    foldl' go count2 (zip candidates1 (map snd alts))
+   where
+    candidates1 = map (delVarSetList candidates0) (map (snd . patIds . fst) alts)
+    go count (cands, t) = findProjectionsCheckEmpty cands count t
+
+    -- Count projections in subject
+    count2 = findProjections candidates0 count1 subj
+
+    -- Add subject to projection count if it is a projection
+    count1 =
+      case subj of
+        Var p
+          | p `elemVarSet` candidates0
+          , [(DataPat _ _ vars, _)] <- alts
+          -> HashMapS.insertWith (<>) p [vars] count0
+        _ -> count0
+
+  -- Non-shadowing constructs
+  TyLam _ t ->  findProjections candidates0 count0 t
+  TyApp t _ ->  findProjections candidates0 count0 t
+  Cast t _ _ -> findProjections candidates0 count0 t
+  Tick _ t ->   findProjections candidates0 count0 t
+  App t1 t2 ->
+    let count1 = findProjections candidates0 count0 t1 in
+    findProjections candidates0 count1 t2
+
+  -- Non-interesting
+  Var _     -> count0
+  Data _    -> count0
+  Literal _ -> count0
+  Prim _    -> count0
+
+replaceProjection ::
+  HasCallStack =>
+
+  -- | Term to replace projections in
+  Id ->
+  -- | Replace field names by these variables respectively
+  [Id] ->
+  -- | In scope term variables, should include /newFieldRefs/
+  InScopeSet ->
+  -- | Projection to replace
+  Term ->
+  -- | Term with replaced projections
+  Term
+replaceProjection target newFieldRefs = go
+ where
+  go inScope0 t0 = case t0 of
+    Lam v t
+      | v == target -> t0 -- Stop if target is shadowed
+      | otherwise -> Lam v (go (extendInScopeSet inScope0 v) t)
+
+    Letrec bindings_ t
+      | any (==target) (map fst bindings_) -> t0 -- Stop if target is shadowed
+      | otherwise ->
+          let inScope1 = extendInScopeSetList inScope0 (map fst bindings_) in
+          Letrec (map (second (go inScope1)) bindings_) (go inScope1 t)
+
+    -- Projecting case we're interested in, replace all old field references
+    -- by new ones.
+    Case (stripTicks -> Var v) _ [(DataPat _ [] oldFieldRefs, body0)]
+      | v == target
+      , let inScope1 = extendInScopeSetList inScope0 oldFieldRefs
+      , let body1 = if target `elem` oldFieldRefs then body0 else go inScope1 body0
+      , let substList = zip oldFieldRefs (map Var newFieldRefs)
+      , let subst = extendIdSubstList (mkSubst inScope0) substList
+      -> substTm "replaceProjections" subst body1
+
+    -- Non-project case / projecting case we're not interested in
+    Case (go inScope0 -> subj) typ alts ->
+      Case subj typ $ flip map alts $ \(pat, body) ->
+        case pat of
+          DataPat _ _ ids | target `elem` ids -> (pat, body) -- Stop if target is shadowed
+          _ -> (pat, go (extendInScopeSetList inScope0 (snd (patIds pat))) body)
+
+    -- Non-shadowing constructs
+    TyLam v t -> TyLam v (go inScope0 t)
+    TyApp t v -> TyApp (go inScope0 t) v
+    Cast t t1 t2 -> Cast (go inScope0 t) t1 t2
+    Tick info t -> Tick info (go inScope0 t)
+    App t1 t2 -> App (go inScope0 t1) (go inScope0 t2)
+
+    -- Non-interesting
+    Var _     -> t0
+    Data _    -> t0
+    Literal _ -> t0
+    Prim _    -> t0
+
 -- | Inline function with a non-representable result if it's the subject
 -- of a Case-decomposition
 inlineNonRep :: HasCallStack => NormRewrite
@@ -452,18 +698,19 @@ inlineNonRep _ e@(Case scrut altsTy alts)
     case (nonRepScrut, bodyMaybe) of
       (True, Just b) -> do
         if overLimit then
-          trace ($(curLoc) ++ [I.i|
-            InlineNonRep: #{showPpr (varName f)} already inlined
-            #{limit} times in: #{showPpr (varName cf)}. The type of the subject
-            is:
+          return e
+          -- trace ($(curLoc) ++ [I.i|
+          --   InlineNonRep: #{showPpr (varName f)} already inlined
+          --   #{limit} times in: #{showPpr (varName cf)}. The type of the subject
+          --   is:
 
-              #{showPpr scrutTy}
+          --     #{showPpr scrutTy}
 
-            Function #{showPpr (varName cf)} will not reach a normal form and
-            compilation might fail.
+          --   Function #{showPpr (varName cf)} will not reach a normal form and
+          --   compilation might fail.
 
-            Run with '-fclash-inline-limit=N' to increase the inline limit to N.
-          |]) (return e)
+          --   Run with '-fclash-inline-limit=N' to increase the inline limit to N.
+          -- |]) (return e)
         else do
           Monad.when notClassTy (zoomExtra (addNewInline f cf))
 

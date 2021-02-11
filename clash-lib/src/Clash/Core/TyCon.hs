@@ -10,6 +10,7 @@
 {-# LANGUAGE DeriveAnyClass #-}
 {-# LANGUAGE FlexibleInstances #-}
 {-# LANGUAGE MultiParamTypeClasses #-}
+{-# LANGUAGE NamedFieldPuns #-}
 
 module Clash.Core.TyCon
   ( TyCon (..)
@@ -19,6 +20,8 @@ module Clash.Core.TyCon
   , mkKindTyCon
   , isTupleTyConLike
   , isNewTypeTc
+  , isGadtTc
+  , isProductTypeTc
   , tyConDataCons
   )
 where
@@ -30,7 +33,7 @@ import qualified Data.Text as T
 import GHC.Generics
 
 -- Internal Imports
-import Clash.Core.DataCon                     (DataCon)
+import Clash.Core.DataCon                     (DataCon (dcExtTyVars))
 import Clash.Core.Name
 import {-# SOURCE #-} Clash.Core.Type         (Kind, Type)
 import Clash.Core.Var                         (TyVar)
@@ -131,3 +134,17 @@ isNewTypeTc
   -> Bool
 isNewTypeTc (AlgTyCon {algTcRhs = NewTyCon {}}) = True
 isNewTypeTc _ = False
+
+-- | Does this type have exactly one constructor?
+--
+-- __N.B.__: Considers newtypes product types (TODO: is this sensible?).
+isProductTypeTc :: TyCon -> Bool
+isProductTypeTc (AlgTyCon{algTcRhs=DataTyCon{dataCons=[_]}}) = True
+-- isProductTypeTc (AlgTyCon{algTcRhs=NewTyCon{}}) = True
+isProductTypeTc _ = False
+
+-- | Does this type use GADT features?
+isGadtTc :: TyCon -> Bool
+isGadtTc (AlgTyCon{algTcRhs=DataTyCon{dataCons}}) =
+  any (not . null . dcExtTyVars) dataCons
+isGadtTc _ = False

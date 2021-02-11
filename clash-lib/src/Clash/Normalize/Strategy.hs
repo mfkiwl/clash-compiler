@@ -75,7 +75,7 @@ constantPropagation =
   conSpec
   where
     etaTL              = apply "etaTL" etaExpansionTL !-> topdownR (apply "applicationPropagation" appPropFast)
-    inlineAndPropagate = repeatR (topdownR (applyMany transPropagateAndInline) >-> inlineNR)
+    inlineAndPropagate = repeatR (topdownR (apply "dedupProjections" dedupProjections) >-> topdownR (applyMany transPropagateAndInline) >-> inlineNR)
     spec               = bottomupR (applyMany specTransformations)
     caseFlattening     = repeatR (topdownR (apply "caseFlat" caseFlat))
     dec                = repeatR (topdownR (apply "DEC" disjointExpressionConsolidation))

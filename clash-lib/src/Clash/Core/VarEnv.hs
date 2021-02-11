@@ -24,6 +24,7 @@ module Clash.Core.VarEnv
   , extendVarEnvWith
   , delVarEnv
   , delVarEnvList
+  , filterVarEnv
   , unionVarEnv
   , unionVarEnvWith
     -- ** Element-wise operations
@@ -35,6 +36,7 @@ module Clash.Core.VarEnv
     -- ** Working with predicates
     -- *** Searching
   , elemVarEnv
+  , elemVarEnvDirectly
   , notElemVarEnv
     -- ** Conversions
     -- *** Lists
@@ -44,7 +46,11 @@ module Clash.Core.VarEnv
     -- ** Construction
   , emptyVarSet
   , unitVarSet
+    -- ** Size information
+  , nullVarSet
     -- ** Modification
+  , delVarSet
+  , delVarSetList
   , delVarSetByKey
   , unionVarSet
     -- ** Working with predicates
@@ -165,6 +171,10 @@ delVarEnvList
   -> VarEnv a
 delVarEnvList = delListUniqMap
 
+-- | Filter VarEnv by only keeping values that satisfy some predicate
+filterVarEnv :: (a -> Bool) -> VarEnv a -> VarEnv a
+filterVarEnv = filterUniqMap
+
 -- | Add a variable-value pair to the environment; overwrites the value if the
 -- variable already exists
 extendVarEnv
@@ -257,6 +267,10 @@ elemVarEnv
   -> Bool
 elemVarEnv = elemUniqMap
 
+-- | Does the unique exist in the environment
+elemVarEnvDirectly :: Unique -> VarEnv b -> Bool
+elemVarEnvDirectly = elemUniqMap
+
 -- | Does the variable not exist in the environment
 notElemVarEnv
   :: Var a
@@ -273,6 +287,10 @@ type VarSet = UniqSet (Var Any)
 emptyVarSet
   :: VarSet
 emptyVarSet = emptyUniqSet
+
+-- | Is this VarSet empty?
+nullVarSet :: VarSet -> Bool
+nullVarSet = nullUniqSet
 
 -- | The set of a single variable
 unitVarSet
@@ -323,6 +341,20 @@ lookupVarSet
   -> VarSet
   -> Maybe (Var Any)
 lookupVarSet = lookupUniqSet
+
+-- | Remove a variable from the set based on its 'Unique'
+delVarSet
+  :: Var a
+  -> VarSet
+  -> VarSet
+delVarSet v vset = delVarSetByKey (getUnique v) vset
+
+-- | Remove a list of variables from the set based on its 'Unique'
+delVarSetList
+  :: VarSet
+  -> [Var a]
+  -> VarSet
+delVarSetList = List.foldl' (flip delVarSet)
 
 -- | Remove a variable from the set based on its 'Unique'
 delVarSetByKey
