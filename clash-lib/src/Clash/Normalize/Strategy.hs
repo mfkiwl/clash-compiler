@@ -46,7 +46,8 @@ normalization =
     recLetRec  = apply "recToLetRec" recToLetRec
     rmUnusedExpr = bottomupR (apply "removeUnusedExpr" removeUnusedExpr)
     rmDeadcode = bottomupR (apply "deadcode" deadCode)
-    bindConst  = topdownR (apply "bindConstantVar" bindConstantVar)
+    bindConst  = topdownR ( apply "bindConstantVar" bindConstantVar
+                        >-> apply "caseCon" caseCon )
     -- See [Note] bottomup traversal evalConst:
 #if !EXPERIMENTAL_EVALUATOR
     evalConst  = bottomupR (apply "evalConst" reduceConst)
