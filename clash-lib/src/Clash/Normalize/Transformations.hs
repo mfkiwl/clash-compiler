@@ -104,7 +104,7 @@ import           Clash.Core.Name
   (mkUnsafeInternalName, Name (..), NameSort (..), mkUnsafeSystemName, nameOcc)
 import           Clash.Core.FreeVars
   (localIdOccursIn, localIdsDoNotOccurIn, freeLocalIds, termFreeTyVars,
-   typeFreeVars, localVarsDoNotOccurIn, localIdDoesNotOccurIn,
+   typeFreeVars, localVarsDoNotOccurIn,
    countFreeOccurances)
 import           Clash.Core.Literal          (Literal (..))
 import           Clash.Core.Pretty           (showPpr)
@@ -998,10 +998,11 @@ removeUnusedExpr _ e = return e
 bindConstantVar :: HasCallStack => NormRewrite
 bindConstantVar = inlineBinders test
   where
-    test _ (i,stripTicks -> e) = case isLocalVar e of
-      -- Don't inline `let x = x in x`, it throws  us in an infinite loop
-      True -> return (i `localIdDoesNotOccurIn` e)
-      _    -> do
+    test _ (i, stripTicks -> e)
+      -- Don't inline self-recursive binders
+      | i `localIdOccursIn` e = pure False
+      -- Check all others for workfreeness
+      | otherwise = do
         tcm <- Lens.view tcCache
         case isWorkFreeIsh tcm e of
           True -> Lens.use (extra.inlineConstantLimit) >>= \case

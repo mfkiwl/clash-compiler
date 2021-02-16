@@ -172,6 +172,11 @@ isWorkFreeIsh tcm e =
     Just b -> b
     Nothing ->
       case collectArgs e of
+        (Var i, [])
+          | not (isPolyFunTy (varType i))
+          , isLocalId i
+          -> True
+
         (Data _, args)     -> all isWorkFreeIshArg args
         (Prim pInfo, args) -> case primWorkInfo pInfo of
           WorkAlways   -> False -- Things like clock or reset generator always
