@@ -26,7 +26,6 @@ import           Control.Monad.Catch hiding (mask)
 import           Data.Bifunctor
 import           Data.Bitraversable
 import           Data.Either
-import           Data.Foldable (traverse_)
 import           Data.Graph (SCC(..))
 import qualified Data.HashMap.Strict as HashMap
 import           Data.Primitive.ByteArray (ByteArray(..))
@@ -94,7 +93,7 @@ import Clash.Core.Pretty (showPpr) -- TODO
 eval :: (HasCallStack) => Term -> Eval Value
 eval ticked = do
   let (term, ticks) = collectTicks ticked
-  traceM ("eval:\n" <> showPpr term)
+  -- traceM ("eval:\n" <> showPpr term)
 
   case term of
     Var i -> do
@@ -142,11 +141,17 @@ eval ticked = do
 
     Tick _ _ -> error "eval: impossible case"
 
+normTyBinder :: (TyVar, Type) -> Eval (TyVar, Type)
+normTyBinder = bitraverse pure normTy
+
+normTyBinders :: [(TyVar, Type)] -> Eval [(TyVar, Type)]
+normTyBinders = traverse normTyBinder
+
 retickResult :: Value -> [TickInfo] -> Value
 retickResult value ticks =
   case value of
     VNeutral (NeLetrec bs x) ->
-      let bs' = fmap (\b -> mkValueTicks b ticks) <$> bs
+      let bs' = fmap (`mkValueTicks` ticks) <$> bs
           x'  = mkValueTicks x ticks
        in VNeutral (NeLetrec bs' x')
 
@@ -158,7 +163,7 @@ forceEval = forceEvalWith [] []
 forceEvalWith :: [(TyVar, Type)] -> [(Id, Value)] -> Value -> Eval Value
 forceEvalWith tvs ids = \case
   VThunk term env -> do
-    tvs' <- traverse (bitraverse pure normTy) tvs
+    tvs' <- normTyBinders tvs
     setLocalEnv env (withTyVars tvs' . withIds ids $ eval term)
 
   -- A ticked thunk is still a thunk.
@@ -232,13 +237,13 @@ lookupLocal i = do
       -- being duplicated...
       if workFree || isSubj -- || isClassTy tcm (varType var)
         then tickInlined var <$> forceEval x
-        else pure (VNeutral (NeVar var))
+        else do -- traceM ("Not inlining: " <> showPpr var <> ": Does work")
+                pure (VNeutral (NeVar var))
 
     Nothing -> pure (VNeutral (NeVar var))
 
 lookupGlobal :: Id -> Eval Value
 lookupGlobal i = do
-  fuel <- getFuel
   var <- findBinding i
   -- tcm <- getTyConMap
   -- let isClass = isClassTy tcm (varType i)
@@ -252,21 +257,34 @@ lookupGlobal i = do
       -- which are not primitives in Clash, as these must be marked NOINLINE.
       |  bindingSpec x == NoInline
       ,  bindingIsPrim x == IsFun
-      -> pure (VNeutral (NeVar i))
+      -> do -- traceM ("Not inlining: " <> showPpr i <> ": NOINLINE")
+            pure (VNeutral (NeVar i))
 
-      -- There is no fuel, meaning no more inlining can occur.
-      |  fuel == 0
-      -> pure (VNeutral (NeVar i))
-
-      -- Inlining can occur, using one unit of fuel in the process.
       |  otherwise
-      -> withFuel $ do
-           val <- forceEval (bindingTerm x)
-           replaceBinding (x { bindingTerm = val })
-           pure (tickInlined i val)
+            -- We check if the identifier is work free, otherwise isWorkFreeBinder
+            -- is not used and we may decide a self-recursive binding is work free.
+      -> do workFree <- workFreeValue (VNeutral $ NeVar $ bindingId x)
+            fuel <- getFuel
+
+            if workFree
+              then do
+                -- traceM ("Inlining: " <> showPpr i <> ": work free")
+                updateGlobal x
+              else if fuel > 0
+                then do
+                  -- traceM ("Inlining: " <> showPpr i <> ": have fuel")
+                  withFuel (updateGlobal x)
+                else do
+                  -- when (fuel == 0) $ traceM ("Not inlining: " <> showPpr i <> ": No fuel")
+                  pure (VNeutral (NeVar i))
 
     Nothing
       -> pure (VNeutral (NeVar i))
+ where
+  updateGlobal x = do
+    value <- forceEval (bindingTerm x)
+    replaceBinding (x { bindingTerm = value })
+    pure (tickInlined i value)
 
 evalData :: (HasCallStack) => DataCon -> Eval Value
 evalData dc
@@ -393,19 +411,13 @@ etaExpand term = do
 
 evalLam :: (HasCallStack) => Id -> Term -> Eval Value
 evalLam i x = do
-  env <- getLocalEnv
   var <- normVarTy i
-  setInScope var
-
-  pure (VLam var x env)
+  withInScope var (VLam var x <$> getLocalEnv)
 
 evalTyLam :: (HasCallStack) => TyVar -> Term -> Eval Value
 evalTyLam i x = do
-  env <- getLocalEnv
   var <- normVarTy i
-  setInScope var
-
-  pure (VTyLam var x env)
+  withInScope var (VTyLam var x <$> getLocalEnv)
 
 evalApp :: (HasCallStack) => Term -> Arg Term -> Eval Value
 evalApp x y
@@ -532,7 +544,10 @@ evalCase term ty as = do
   inScope <- getInScope
   alts <- delayAlts (deShadowAlt inScope <$> as)
 
-  caseCon subject altTy alts
+  -- We set the pattern tyvars / ids as being in scope before evaluating the case.
+  --
+  let bound = concatMap (patVars . fst) alts
+  withInScopeList bound (caseCon subject altTy alts)
 
 -- | Attempt to apply the case-of-known-constructor transformation on a case
 -- expression. If no suitable alternative can be chosen, attempt to transform
@@ -580,18 +595,17 @@ tryTransformCase subject altTy alts =
     VNeutral (NeCase innerSubject _ innerAlts) -> do
       forcedInnerAlts <- forceAlts innerAlts
 
-      if all (isKnown . snd) forcedInnerAlts
+      if any (isKnown . snd) forcedInnerAlts then
         -- We can do case of case, attempt caseCon on the result
-        then
-          let asCase v = VNeutral (NeCase v altTy alts)
-              newAlts  = second asCase <$> forcedInnerAlts
-           in caseCon innerSubject altTy newAlts
+        let asCase v = VNeutral (NeCase v altTy alts)
+            newAlts  = second asCase <$> forcedInnerAlts
+         in caseCon innerSubject altTy newAlts
 
         -- We cannot do case of case, force alternatives and remove absurd
         -- patterns from the result.
-        else do
-          forcedAlts <- forceAlts alts
-          pure (VNeutral (NeCase subject altTy forcedAlts))
+      else do
+        forcedAlts <- forceAlts alts
+        pure (VNeutral (NeCase subject altTy forcedAlts))
 
     -- A case of let: Pull out the let expression if possible and attempt
     -- caseCon on the new case expression.
@@ -607,8 +621,6 @@ tryTransformCase subject altTy alts =
  where
   -- We only care about case of case if alternatives of the inner case
   -- expression correspond to something we can do caseCon on.
-  --
-  -- TODO We may also care if it is another case of case?
   --
   isKnown = \case
     VNeutral (NePrim pr _) ->
@@ -633,9 +645,6 @@ delayAlts = traverse (bitraverse delayPat delayAlways)
       let tys  = fmap (\tv -> (tv, VarTy tv)) tvs'
 
       ids' <- withTyVars tys (traverse normVarTy ids)
-
-      traverse_ setInScope tvs'
-      traverse_ setInScope ids'
 
       pure (DataPat dc tvs' ids')
 
@@ -950,10 +959,15 @@ apply val arg = do
       -- TODO This should not produce a new let binding if the binding would
       -- be inlined by bindConstantVar.
       | otherwise -> do
-          varTy <- normTy argTy
-          var <- getUniqueId "workArg" varTy
-          inner <- apply x (VNeutral (NeVar var))
-          pure (mkValueTicks (VNeutral (NeLetrec (bs <> [(var, arg)]) inner)) ticks)
+          let bound = fmap fst bs
+
+          withInScopeList bound $ do
+            varTy <- normTy argTy
+            var <- getUniqueId "workArg" varTy
+
+            withInScope var $ do
+              inner <- apply x (VNeutral (NeVar var))
+              pure (mkValueTicks (VNeutral (NeLetrec (bs <> [(var, arg)]) inner)) ticks)
 
     -- If the LHS of application is neutral, make a letrec around the neutral
     -- application if the argument performs work.
@@ -966,8 +980,10 @@ apply val arg = do
       | otherwise -> do
           varTy <- normTy argTy
           var <- getUniqueId "workArg" varTy
-          let inner = VNeutral (NeApp neu (VNeutral (NeVar var)))
-          pure (mkValueTicks (VNeutral (NeLetrec [(var, arg)] inner)) ticks)
+
+          withInScope var $ do
+            let inner = VNeutral (NeApp neu (VNeutral (NeVar var)))
+            pure (mkValueTicks (VNeutral (NeLetrec [(var, arg)] inner)) ticks)
 
     -- If the LHS of application is a lambda, make a letrec with the name of
     -- the argument around the result of evaluation if it performs work.
@@ -987,16 +1003,17 @@ apply val arg = do
             j <- getUniqueId (nameOcc (varName i)) (varType i)
             let jVal = VNeutral (NeVar j)
 
-            inScope <- getInScope
-            let x' = deShadowTerm inScope x
+            withInScope j $ do
+              inScope <- getInScope
+              let x' = deShadowTerm inScope x
 
-            -- (j, arg) is not bound in the environment, as this leads to extra
-            -- inlining with case subjects which currently leads to free FVs.
-            inner <- withIds [(i, jVal)] (eval x')
+              -- (j, arg) is not bound in the environment, as this leads to extra
+              -- inlining with case subjects which currently leads to free FVs.
+              inner <- withIds [(i, jVal)] (eval x')
 
-            -- TODO Make this more efficient: only generate a single let for a
-            -- work free argument that doesn't change between calls.
-            pure (mkValueTicks (VNeutral (NeLetrec [(j, arg)] inner)) ticks)
+              -- TODO Make this more efficient: only generate a single let for a
+              -- work free argument that doesn't change between calls.
+              pure (mkValueTicks (VNeutral (NeLetrec [(j, arg)] inner)) ticks)
 
     _ -> throwM (CannotApply lhs (Left arg))
  where

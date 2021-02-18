@@ -147,13 +147,6 @@ isUndefined = \case
 -- | A term which is in beta-normal eta-long form (NF). This has no redexes,
 -- and all partially applied functions in sub-terms are eta-expanded.
 --
--- While not strictly necessary, NLam includes the environment at the point the
--- original term was evaluated. This makes it easier for the AsTerm instance
--- for Normal to reintroduce let expressions before lambdas without
--- accidentally floating a let using a lambda bound variable outwards.
--- TODO Is this still needed now we have NeLetrec and keep let bindings
--- that do work?
---
 data Normal
   = NNeutral  !(Neutral Normal)
   | NLiteral  !Literal
@@ -171,6 +164,10 @@ data LocalEnv = LocalEnv
   , lenvValues :: Map Id Value
     -- ^ Local term environment. These are WHNF terms or unevaluated thunks
     -- introduced while evaluating the current term (i.e. by applications)
+  , lenvInScope :: InScopeSet
+    -- ^ The set of in scope variables during partial evaluation. This includes
+    -- new variables introduced by the evaluator (such as the ids of binders
+    -- introduced during eta expansion.)
   , lenvFuel :: Word
     -- ^ The amount of fuel left in the local environment when the previous
     -- head was reached. This is needed so resuming evaluation does not lead
@@ -192,8 +189,9 @@ instance Show LocalEnv where
     ]
 -}
 
--- TODO Add recursion info to the global environment. Until then we are forced
--- to spend fuel on non-recursive (terminating) terms.
+-- TODO Add recursion info to the binding map. Until then we are forced to
+-- spend fuel on non-recursive (terminating) terms. Later it would save us from
+-- calling termination analysis on non-recursive terms.
 
 data GlobalEnv = GlobalEnv
   { genvBindings :: VarEnv (Binding Value)
@@ -201,10 +199,6 @@ data GlobalEnv = GlobalEnv
     -- of the top level definitions which are forced on lookup.
   , genvTyConMap :: TyConMap
     -- ^ The type constructors known about by Clash.
-  , genvInScope :: InScopeSet
-    -- ^ The set of in scope variables during partial evaluation. This includes
-    -- new variables introduced by the evaluator (such as the ids of binders
-    -- introduced during eta expansion.)
   , genvSupply :: Supply
     -- ^ The supply of fresh names for generating identifiers.
   , genvFuel :: Word

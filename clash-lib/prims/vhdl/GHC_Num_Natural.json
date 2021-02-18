@@ -94,4 +94,12 @@
 -- end naturalCompare"
   }
 }
+, { "BlackBox" :
+  { "name"     : "GHC.Num.Natural.naturalOr"
+  , "kind"     : "Expression"
+  , "type"     : "naturalOr :: Natural -> Natural -> Natural"
+  , "template" : "~ARG[0] or ~ARG[1]"
+  , "warning": "GHC.Num.Natural.naturalOr: Naturals are dynamically sized in simulation, but fixed-length after synthesis. Use carefully."
+  }
+}
 ]

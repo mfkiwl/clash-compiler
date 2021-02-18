@@ -50,7 +50,8 @@ module Clash.Core.PartialEval.Monad
     -- * Accessing Global State
   , getTyConMap
   , getInScope
-  , setInScope
+  , withInScope
+  , withInScopeList
   , getAddr
     -- * Fresh Variable Generation
   , getUniqueId
@@ -75,6 +76,7 @@ import           Data.Bitraversable (bitraverse)
 import qualified Data.Either as Either
 import qualified Data.IntMap.Strict as IntMap
 import qualified Data.Map.Strict as Map
+import           Data.Maybe (fromMaybe)
 
 import           Clash.Core.FreeVars (localFVsOfTerms, tyFVsOfTypes)
 import           Clash.Core.Name (OccName)
@@ -88,10 +90,11 @@ import           Clash.Core.Util (mkUniqSystemId, mkUniqSystemTyVar)
 import           Clash.Core.Var (Id, TyVar, Var(varType), isLocalId)
 import           Clash.Core.VarEnv
 import           Clash.Driver.Types (Binding(..))
-import           Clash.Rewrite.WorkFree (isWorkFree, isWorkFreeIsh)
+import           Clash.Rewrite.WorkFree (isConstant, isWorkFree, isWorkFreeBinder)
 import           Clash.Unique (subsetUniqSet)
 
 import Clash.Debug -- TODO
+import Clash.Core.Pretty
 
 {-
 NOTE [RWS monad]
@@ -174,7 +177,10 @@ getLocalEnv = RWS.ask
 {-# INLINE getLocalEnv #-}
 
 setLocalEnv :: LocalEnv -> Eval a -> Eval a
-setLocalEnv = RWS.local . const
+setLocalEnv new =
+  let mergeInScope = unionInScope (lenvInScope new) . lenvInScope
+      minFuel      = min (lenvFuel new) . lenvFuel
+   in RWS.local (\env -> new { lenvInScope = mergeInScope env, lenvFuel = minFuel env })
 {-# INLINE setLocalEnv #-}
 
 modifyLocalEnv :: (LocalEnv -> LocalEnv) -> Eval a -> Eval a
@@ -198,17 +204,13 @@ withTyVar i ty = withTyVars [(i, ty)]
 withTyVars :: [(TyVar, Type)] -> Eval a -> Eval a
 withTyVars tys action = do
   normTys <- traverse (bitraverse pure normTy) tys
-
-  modifyGlobalEnv (goGlobal normTys)
   modifyLocalEnv (goLocal normTys) action
  where
-  goGlobal xs env@GlobalEnv{genvInScope=inScope} =
-    let vs = mkVarSet (fst <$> xs) `unionVarSet` tyFVsOfTypes (snd <$> xs)
-        is = inScope `unionInScope` mkInScopeSet vs
-     in env { genvInScope = is }
-
-  goLocal xs env@LocalEnv{lenvTypes=types} =
-    (substEnvTys xs env) { lenvTypes = Map.fromList xs <> types }
+  goLocal xs env@LocalEnv{lenvTypes=types,lenvInScope=inScope} =
+    let vs   = mkVarSet (fst <$> xs) `unionVarSet` tyFVsOfTypes (snd <$> xs)
+        is   = inScope `unionInScope` mkInScopeSet vs
+        env' = substEnvTys xs env
+     in env' { lenvTypes = Map.fromList xs <> types , lenvInScope = is }
 
 -- | Substitute all bound types in the environment with the list of bindings.
 -- This must be used after normTy to ensure that the substitution does not
@@ -260,20 +262,15 @@ withId :: Id -> Value -> Eval a -> Eval a
 withId i v = withIds [(i, v)]
 
 withIds :: [(Id, Value)] -> Eval a -> Eval a
-withIds ids action = do
-  modifyGlobalEnv goGlobal
-  modifyLocalEnv goLocal action
+withIds ids = modifyLocalEnv goLocal
  where
-  goGlobal env@GlobalEnv{genvInScope=inScope} =
+  goLocal env@LocalEnv{lenvValues=values,lenvInScope=inScope} =
     --  TODO Is it a hack to use asTerm here?
     --  Arguably yes, but you can't take FVs of Value / Neutral yet.
     let fvs = mkVarSet (fst <$> ids)
                 `unionVarSet` localFVsOfTerms (asTerm . snd <$> ids)
         iss = inScope `unionInScope` mkInScopeSet fvs
-     in env { genvInScope = iss }
-
-  goLocal env@LocalEnv{lenvValues=values} =
-    env { lenvValues = Map.fromList ids <> values }
+     in env { lenvValues = Map.fromList ids <> values, lenvInScope = iss }
 
 findBinding :: Id -> Eval (Maybe (Binding Value))
 findBinding i = lookupVarEnv i . genvBindings <$> getGlobalEnv
@@ -334,13 +331,16 @@ getTyConMap :: Eval TyConMap
 getTyConMap = genvTyConMap <$> getGlobalEnv
 
 getInScope :: Eval InScopeSet
-getInScope = genvInScope <$> getGlobalEnv
+getInScope = lenvInScope <$> getLocalEnv
 
-setInScope :: Var a -> Eval ()
-setInScope var = modifyGlobalEnv go
+withInScope :: Var a -> Eval b -> Eval b
+withInScope var = withInScopeList [var]
+
+withInScopeList :: [Var a] -> Eval b -> Eval b
+withInScopeList vars = modifyLocalEnv go
  where
-  go env@GlobalEnv{genvInScope=inScope} =
-    env { genvInScope = extendInScopeSet inScope var }
+  go env@LocalEnv{lenvInScope=inScope} =
+    env { lenvInScope = extendInScopeSetList inScope vars }
 
 getAddr :: Eval Int
 getAddr = genvAddr <$> getGlobalEnv
@@ -359,29 +359,41 @@ getUniqueVar
   -> KindOrType
   -> Eval (Var a)
 getUniqueVar f name ty = do
-  env <- getGlobalEnv
-  let iss = genvInScope env
-      ids = genvSupply env
-      ((ids', iss'), i) = f (ids, iss) (name, ty)
+  iss <- getInScope
+  ids <- genvSupply <$> getGlobalEnv
+  let ((ids', _), i) = f (ids, iss) (name, ty)
 
-  modifyGlobalEnv (go ids' iss')
+  modifyGlobalEnv (go ids')
   pure i
  where
-  go ids iss env =
-    env { genvInScope = iss, genvSupply = ids }
+  go ids env =
+    env { genvSupply = ids }
 
 workFreeValue :: Value -> Eval Bool
-workFreeValue = \case
-  VNeutral (NeVar _) -> pure True
-  VNeutral p@NePrim{} -> do
-    bindings <- fmap (fmap asTerm) . genvBindings <$> getGlobalEnv
-    isWorkFree workFreeCache bindings (asTerm p)
-  VNeutral (NeCase x _ [(_, y)]) ->
-    allM workFreeValue [x, y]
-  VNeutral _ -> pure False
-  VTick x _ -> workFreeValue x
-  VCast x _ _ -> workFreeValue x
-  VThunk x _ -> do
-    bindings <- fmap (fmap asTerm) . genvBindings <$> getGlobalEnv
-    isWorkFree workFreeCache bindings x
-  _ -> pure True
+workFreeValue value = do
+  bindingValues <- fmap genvBindings getGlobalEnv
+  let bindingTerms = fmap (fmap asTerm) bindingValues
+  isWorkFree workFreeCache bindingTerms (asTerm value)
+{-
+workFreeValue value = do
+  cache <- genvWorkCache <$> getGlobalEnv
+
+  case value of
+    VNeutral (NeVar i) -> do
+      traceM ("workFreeValue: " <> showPpr i)
+      let maybeInfo = lookupVarEnv i cache
+       in pure (fromMaybe (isLocalId i) maybeInfo)
+    VNeutral p@NePrim{} -> do
+      bindings <- fmap (fmap asTerm) . genvBindings <$> getGlobalEnv
+      isWorkFree workFreeCache bindings (asTerm p)
+    VNeutral (NeCase x _ [(_, y)]) ->
+      allM workFreeValue [x, y]
+    VNeutral _ -> pure False
+    VTick x _ -> workFreeValue x
+    VCast x _ _ -> workFreeValue x
+    _ -> do
+      let term = asTerm value
+      traceM ("workFreeValue: value:\n" <> show value <> "\nterm:\n" <> showPpr term)
+      bindings <- fmap (fmap asTerm) . genvBindings <$> getGlobalEnv
+      isWorkFree workFreeCache bindings term
+-}

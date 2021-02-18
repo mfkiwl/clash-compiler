@@ -43,5 +43,8 @@ removeAnnotations = reAnnotate $ const ()
 class ClashPretty a where
   clashPretty :: a -> Doc ()
 
+instance ClashPretty Bool where
+  clashPretty = fromPretty
+
 fromPretty :: Pretty a => a -> Doc ()
 fromPretty = removeAnnotations . pretty

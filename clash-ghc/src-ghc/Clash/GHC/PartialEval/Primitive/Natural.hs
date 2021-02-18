@@ -74,6 +74,7 @@ naturalPrims = HashMap.fromList
   , ("GHC.Num.Natural.naturalToWord#", primToWord)
   , ("GHC.Num.Natural.naturalToWordClamp", primToWordClamp)
   , ("GHC.Num.Natural.naturalXor", liftBinary naturalXor)
+  , ("GHC.Num.Natural.$wnaturalNegate", liftUnary naturalNegate)
   , ("GHC.Num.Natural.$wnaturalSignum", liftUnary naturalSignum)
   ]
 #else

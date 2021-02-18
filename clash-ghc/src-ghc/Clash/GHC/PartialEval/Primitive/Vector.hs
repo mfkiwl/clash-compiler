@@ -32,7 +32,7 @@ vectorPrims :: HashMap Text PrimImpl
 vectorPrims = HashMap.fromList
   [ ("Clash.Sized.Vector.++", coreUnfolding)
   , ("Clash.Sized.Vector.concat", coreUnfolding)
-  , ("Clash.Sized.Vector.concatBitVector#", coreUnfolding)
+  , ("Clash.Sized.Vector.concatBitVector#", primConcatBitVector)
 --, ("Clash.Sized.Vector.dfold", primDfold)
 --, ("Clash.Sized.Vector.dtfold", primDtfold)
 --, ("Clash.Sized.Vector.fold", primFold)
@@ -159,6 +159,24 @@ primSplitAt eval pr args
     case a of
       LNil -> throwM ResultUndefined
       LCons y ys -> go pM (i - 1) (y:acc) ys
+
+primConcatBitVector :: PrimImpl
+primConcatBitVector e pr args
+  | [Right n, Right m, Left knN, Left knM, Left x] <- args
+  = do szN <- typeSize n (Just knN)
+       szM <- typeSize m (Just knM)
+       reifyNat szN (\pN -> reifyNat szM (\pM -> go pN pM x))
+
+  | otherwise
+  = empty
+ where
+  go :: forall n m. (KnownNat n, KnownNat m)
+     => Proxy n -> Proxy m -> Value -> Eval Value
+  go pN pM x = do
+    a <- fromValueForce @(Vec n (BitVector m)) x
+    resTy <- resultType pr args
+
+    toValue @(BitVector (n * m)) (Vec.concatBitVector# @n @m a) resTy
 
 primUnconcatBitVector :: PrimImpl
 primUnconcatBitVector e p args

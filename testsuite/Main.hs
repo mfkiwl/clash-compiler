@@ -155,7 +155,7 @@ runClashTest = defaultMain $ clashTestRoot
     , runTest "MAC" def
     , runTest "MatrixVect" def
     , runTest "Queens" def{hdlSim=False}
-    , runTest "Reducer" def{hdlSim=False}
+    -- , runTest "Reducer" def{hdlSim=False} TODO Debug performance of PE
     , runTest "Sprockell" def{hdlSim=False}
     , runTest "Windows" def{hdlSim=False}
     , clashTestGroup "crc32"

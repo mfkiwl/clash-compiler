@@ -168,11 +168,11 @@ partialEval (TransformContext is0 _) e = do
   eval <- Lens.view peEvaluator
 
   let (ids1, ids2) = splitSupply ids
-  let genv = mkGlobalEnv bndrs tcm is0 ids1 fuel heap addr False
+  let genv = mkGlobalEnv bndrs tcm ids1 fuel heap addr False
 
   uniqSupply Lens..= ids2
 
-  case unsafePerformIO (nf eval genv e) of
+  case unsafePerformIO (nf eval genv is0 e) of
     (!e', !genv') -> do
       ioHeap Lens..= genvHeap genv'
       ioAddr Lens..= genvAddr genv'

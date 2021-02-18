@@ -51,6 +51,8 @@ module Clash.Unique
     -- * UniqSet
   , UniqSet
     -- ** Accessors
+    -- *** Size information
+  , nullUniqSet
     -- *** Indexing
   , lookupUniqSet
     -- ** Construction
@@ -380,6 +382,12 @@ elemUniqSetDirectly
   -> UniqSet a
   -> Bool
 elemUniqSetDirectly k (UniqSet m) = k `IntMap.member` m
+
+-- | Check whether a set is empty
+nullUniqSet
+  :: UniqSet a
+  -> Bool
+nullUniqSet (UniqSet env) = IntMap.null env
 
 -- | Look up an element in the set, returns it if it exists
 lookupUniqSet

@@ -27,6 +27,7 @@ ghcPrims = HashMap.fromList
   , ("Debug.Trace.trace", liftId)
   , ("GHC.Base.eqString", liftBinary eqString)
   , ("GHC.CString.unpackCString#", liftId)
+  , ("GHC.CString.unpackAppendCString#", liftId)
   , ("GHC.Classes.&&", liftLazyBinary (&&) False)
   , ("GHC.Classes.divInt#", liftBinary# divInt#)
   , ("GHC.Classes.eqInt", coreUnfolding)

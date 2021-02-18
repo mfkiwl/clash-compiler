@@ -16,9 +16,14 @@ module Clash.Core.PartialEval.AsTerm
   ) where
 
 import Data.Bifunctor (first, second)
+import Data.Map.Strict (Map)
+import qualified Data.Map.Strict as Map
 
+import Clash.Core.FreeVars (localFVsOfTerms)
 import Clash.Core.PartialEval.NormalForm
-import Clash.Core.Term (Term(..), Pat, Alt, mkApps)
+import Clash.Core.Term (Term(..), LetBinding, Pat, Alt, mkApps)
+import Clash.Core.Var (Id)
+import Clash.Core.VarEnv (VarSet, nullVarSet, elemVarSet)
 
 -- | Convert a term in some normal form back into a Term. This is important,
 -- as it may perform substitutions which have not yet been performed (i.e. when
@@ -44,12 +49,33 @@ instance AsTerm Value where
   asTerm = \case
     VNeutral neu -> asTerm neu
     VLiteral lit -> Literal lit
-    VData dc args _env -> mkApps (Data dc) (argsToTerms args)
-    VLam i x _env -> Lam i x
-    VTyLam i x _env -> TyLam i x
+    VData dc args env ->
+      let term = mkApps (Data dc) (argsToTerms args)
+       in bindEnv term env
+    VLam i x env ->
+      let term = Lam i x
+       in bindEnv term env
+    VTyLam i x env ->
+      let term = TyLam i x
+       in bindEnv term env
     VCast x a b -> Cast (asTerm x) a b
     VTick x tick -> Tick tick (asTerm x)
-    VThunk x _env -> x
+    VThunk x env -> bindEnv x env
+   where
+    bindEnv :: Term -> LocalEnv -> Term
+    bindEnv x env =
+      let fvs = localFVsOfTerms [x]
+          binds = go [] fvs (lenvValues env)
+       in if null binds then x else Letrec (go [] fvs (lenvValues env)) x
+
+    go :: [LetBinding] -> VarSet -> Map Id Value -> [LetBinding]
+    go acc fvs bindings
+      | nullVarSet fvs = acc
+      | otherwise =
+          let (used, rest) = Map.partitionWithKey (\k _ -> k `elemVarSet` fvs) bindings
+              used' = Map.toList (fmap asTerm used)
+              fvs' = localFVsOfTerms (fmap snd used')
+           in go (acc <> used') fvs' rest
 
 instance AsTerm Normal where
   asTerm = \case

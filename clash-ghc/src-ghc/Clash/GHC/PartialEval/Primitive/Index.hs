@@ -1,7 +1,9 @@
+{-# LANGUAGE DataKinds #-}
 {-# LANGUAGE FlexibleContexts #-}
 {-# LANGUAGE MagicHash #-}
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE RankNTypes #-}
+{-# LANGUAGE TypeFamilies #-}
 
 module Clash.GHC.PartialEval.Primitive.Index
   ( indexPrims
@@ -12,8 +14,12 @@ import qualified Data.HashMap.Strict as HashMap (fromList)
 import Data.Proxy
 import Data.Reflection
 import Data.Text (Text)
+import Data.Type.Equality
 import GHC.TypeLits
+import GHC.TypeLits.Extra (CLog)
+import Unsafe.Coerce
 
+import Clash.Sized.Internal.BitVector (BitVector)
 import Clash.Sized.Internal.Index
 
 import Clash.Core.PartialEval.Monad
@@ -49,7 +55,7 @@ indexPrims = HashMap.fromList
   , ("Clash.Sized.Internal.Index.resize#", primResize)
   , ("Clash.Sized.Internal.Index.times#", primTimes)
   , ("Clash.Sized.Internal.Index.toInteger#", primToInteger)
-  , ("Clash.Sized.Internal.Index.unpack#", coreUnfolding)
+  , ("Clash.Sized.Internal.Index.unpack#", primUnpack)
   ]
 
 extendingNumAIndex
@@ -122,3 +128,23 @@ primResize e p args
     a <- fromValueForce @(Index m) x
     resTy <- resultType p args
     toValue @(Index n) (resize# a) resTy
+
+primUnpack :: PrimImpl
+primUnpack e p args
+  | [Right n, Right nGt1, Left knN, Left x] <- args
+  = do sz <- typeSize n (Just knN)
+       reifyNat sz (\proxy -> go proxy x)
+
+  | otherwise
+  = empty
+ where
+  go :: forall m. (KnownNat m) => Proxy m -> Value -> Eval Value
+  go proxy x = do
+    a <- fromValueForce @(BitVector (CLog 2 m)) x
+    resTy <- resultType p args
+
+    case sizeProof proxy of
+      Refl -> toValue @(Index m) (unpack# a) resTy
+
+  sizeProof :: Proxy m -> ((1 <=? m) :~: 'True)
+  sizeProof = unsafeCoerce Refl

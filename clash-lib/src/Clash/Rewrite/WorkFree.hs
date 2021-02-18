@@ -13,6 +13,7 @@ duplicating work in the result, e.g. inlining.
 
 module Clash.Rewrite.WorkFree
   ( isWorkFree
+  , isWorkFreeBinder
   , isWorkFreeClockOrResetOrEnable
   , isWorkFreeIsh
   , isConstant

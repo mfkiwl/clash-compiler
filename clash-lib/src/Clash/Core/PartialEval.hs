@@ -19,7 +19,7 @@ import Clash.Core.PartialEval.Monad
 import Clash.Core.PartialEval.NormalForm
 import Clash.Core.Term (Term)
 import Clash.Core.TyCon (TyConMap)
-import Clash.Core.VarEnv (InScopeSet)
+import Clash.Core.VarEnv (InScopeSet, emptyInScopeSet)
 import Clash.Driver.Types (Binding(..), BindingMap)
 
 -- | An evaluator for Clash core. This consists of two functions: one to
@@ -40,12 +40,14 @@ whnf
   -- ^ The evaluator implementation to use.
   -> GlobalEnv
   -- ^ The initial global environment.
+  -> InScopeSet
+  -- ^ The set of initially in scope variables.
   -> Term
   -- ^ The term under evaluation.
   -> IO (Term, GlobalEnv)
   -- ^ The term evalated to WHNF, and the final global environment.
-whnf e g x =
-  let l = LocalEnv mempty mempty (genvFuel g)
+whnf e g i x =
+  let l = LocalEnv mempty mempty i (genvFuel g)
    in runEval g l (asTerm <$> evalWhnf e x)
 
 -- | Evaluate a term to NF, converting the result back to a Term.
@@ -56,12 +58,14 @@ nf
   -- ^ The evaluator implementation to use.
   -> GlobalEnv
   -- ^ The initial global environment.
+  -> InScopeSet
+  -- ^ The set of initially in scope variables.
   -> Term
   -- ^ The term under evaluation.
   -> IO (Term, GlobalEnv)
   -- ^ The term evalated to NF, and the final global environment.
-nf e g x =
-  let l = LocalEnv mempty mempty (genvFuel g)
+nf e g i x =
+  let l = LocalEnv mempty mempty i (genvFuel g)
    in do runEval g l (asTerm <$> (evalWhnf e x >>= quoteNf e))
 
 mkGlobalEnv
@@ -69,8 +73,6 @@ mkGlobalEnv
   -- ^ Global bindings available to the evaluator.
   -> TyConMap
   -- ^ The type constructors known by Clash.
-  -> InScopeSet
-  -- ^ The set of variables in scope during evaluation.
   -> Supply
   -- ^ The supply of fresh names for variables.
   -> Word
@@ -82,8 +84,8 @@ mkGlobalEnv
   -> Bool
   -- ^ Whether evaluation starts in the subject of a case expression.
   -> GlobalEnv
-mkGlobalEnv bm tcm iss ids fuel heap addr isSubj =
-  GlobalEnv (fmap asThunk bm) tcm iss ids fuel heap addr isSubj mempty
+mkGlobalEnv bm tcm ids fuel heap addr isSubj =
+  GlobalEnv (fmap asThunk bm) tcm ids fuel heap addr isSubj mempty
  where
   asThunk b@Binding{bindingTerm=term} =
-    b { bindingTerm = VThunk term (LocalEnv mempty mempty fuel) }
+    b { bindingTerm = VThunk term (LocalEnv mempty mempty emptyInScopeSet fuel) }
