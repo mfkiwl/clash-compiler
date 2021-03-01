@@ -58,6 +58,7 @@ module Clash.Core.PartialEval.Monad
   , getUniqueTyVar
     -- * Work free check
   , workFreeValue
+  , expandableValue
   ) where
 
 import           Control.Applicative (Alternative)
@@ -90,7 +91,7 @@ import           Clash.Core.Util (mkUniqSystemId, mkUniqSystemTyVar)
 import           Clash.Core.Var (Id, TyVar, Var(varType), isLocalId)
 import           Clash.Core.VarEnv
 import           Clash.Driver.Types (Binding(..))
-import           Clash.Rewrite.WorkFree (isConstant, isWorkFree, isWorkFreeBinder)
+import           Clash.Rewrite.WorkFree
 import           Clash.Unique (subsetUniqSet)
 
 import Clash.Debug -- TODO
@@ -369,11 +370,24 @@ getUniqueVar f name ty = do
   go ids env =
     env { genvSupply = ids }
 
+expandableValue :: Value -> Eval Bool
+expandableValue value = do
+  bindingValues <- fmap genvBindings getGlobalEnv
+  let bindingTerms = fmap (fmap unsafeAsTerm) bindingValues
+
+  pure (isExpandable bindingTerms (unsafeAsTerm value))
+
 workFreeValue :: Value -> Eval Bool
 workFreeValue value = do
   bindingValues <- fmap genvBindings getGlobalEnv
-  let bindingTerms = fmap (fmap asTerm) bindingValues
-  isWorkFree workFreeCache bindingTerms (asTerm value)
+  tcm <- getTyConMap
+
+  let bindingTerms = fmap (fmap unsafeAsTerm) bindingValues
+      term = unsafeAsTerm value
+
+  case isWorkFreeClockOrResetOrEnable tcm term of
+    Just res -> pure res
+    Nothing  -> isWorkFree workFreeCache bindingTerms term
 {-
 workFreeValue value = do
   cache <- genvWorkCache <$> getGlobalEnv

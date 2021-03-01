@@ -25,42 +25,61 @@ import Clash.Core.Term (Term(..), LetBinding, Pat, Alt, mkApps)
 import Clash.Core.Var (Id)
 import Clash.Core.VarEnv (VarSet, nullVarSet, elemVarSet)
 
--- | Convert a term in some normal form back into a Term. This is important,
--- as it may perform substitutions which have not yet been performed (i.e. when
--- converting from WHNF where heads contain the environment at that point).
+-- | Convert a term in some normal form back into a Term.
 --
 class AsTerm a where
-  asTerm:: a -> Term
+  -- | Convert a term in some normal form back into a Term. If the normal form
+  -- keeps track of an environment (e.g. Value) this function will also let
+  -- bind anything from the environment that would otherwise appear free.
+  asTerm :: a -> Term
+
+  -- | Convert a term in some normal form back into a Term. If the normal form
+  -- keeps track of an environment (e.g. Value) this function will not let bind
+  -- anything from the environment, meaning they may appear free in the result.
+  --
+  -- This is used to produce terms to use with functions like isWorkFree, where
+  -- using asTerm would result in a work-free term being identified as doing
+  -- work because it relies on some let bound definition which performs work.
+  unsafeAsTerm :: a -> Term
 
 instance (AsTerm a) => AsTerm (Neutral a) where
-  asTerm = \case
+  asTerm = unsafeAsTerm
+
+  unsafeAsTerm = \case
     NeVar i -> Var i
-    NePrim pr args -> mkApps (Prim pr) (argsToTerms args)
-    NeApp x y -> App (asTerm x) (asTerm y)
-    NeTyApp x ty -> TyApp (asTerm x) ty
+    NePrim pr args -> mkApps (Prim pr) (unsafeArgsToTerms args)
+    NeApp x y -> App (unsafeAsTerm x) (unsafeAsTerm y)
+    NeTyApp x ty -> TyApp (unsafeAsTerm x) ty
     NeLetrec bs x ->
-      let bs' = fmap (second asTerm) bs
-          x'  = asTerm x
+      let bs' = fmap (second unsafeAsTerm) bs
+          x'  = unsafeAsTerm x
        in Letrec bs' x'
 
-    NeCase x ty alts -> Case (asTerm x) ty (altsToTerms alts)
+    NeCase x ty alts -> Case (unsafeAsTerm x) ty (unsafeAltsToTerms alts)
 
 instance AsTerm Value where
-  asTerm = \case
-    VNeutral neu -> asTerm neu
-    VLiteral lit -> Literal lit
-    VData dc args env ->
-      let term = mkApps (Data dc) (argsToTerms args)
-       in bindEnv term env
-    VLam i x env ->
-      let term = Lam i x
-       in bindEnv term env
-    VTyLam i x env ->
-      let term = TyLam i x
-       in bindEnv term env
-    VCast x a b -> Cast (asTerm x) a b
-    VTick x tick -> Tick tick (asTerm x)
-    VThunk x env -> bindEnv x env
+  asTerm value =
+    case value of
+      VData _ _ env ->
+        bindEnv (unsafeAsTerm value) env
+
+      VLam _ _ env ->
+        bindEnv (unsafeAsTerm value) env
+
+      VTyLam _ _ env ->
+        bindEnv (unsafeAsTerm value) env
+
+      VCast x a b ->
+        Cast (asTerm x) a b
+
+      VTick x t ->
+        Tick t (asTerm x)
+
+      VThunk _ env ->
+        bindEnv (unsafeAsTerm value) env
+
+      _ ->
+        unsafeAsTerm value
    where
     bindEnv :: Term -> LocalEnv -> Term
     bindEnv x env =
@@ -73,22 +92,34 @@ instance AsTerm Value where
       | nullVarSet fvs = acc
       | otherwise =
           let (used, rest) = Map.partitionWithKey (\k _ -> k `elemVarSet` fvs) bindings
-              used' = Map.toList (fmap asTerm used)
+              used' = Map.toList (fmap unsafeAsTerm used)
               fvs' = localFVsOfTerms (fmap snd used')
            in go (acc <> used') fvs' rest
 
+  unsafeAsTerm = \case
+    VNeutral neu -> unsafeAsTerm neu
+    VLiteral lit -> Literal lit
+    VData dc args _ -> mkApps (Data dc) (unsafeArgsToTerms args)
+    VLam i x _ -> Lam i x
+    VTyLam i x _ -> TyLam i x
+    VCast x a b -> Cast (unsafeAsTerm x) a b
+    VTick x tick -> Tick tick (unsafeAsTerm x)
+    VThunk x _ -> x
+
 instance AsTerm Normal where
-  asTerm = \case
-    NNeutral neu -> asTerm neu
+  asTerm = unsafeAsTerm
+
+  unsafeAsTerm = \case
+    NNeutral neu -> unsafeAsTerm neu
     NLiteral lit -> Literal lit
-    NData dc args -> mkApps (Data dc) (argsToTerms args)
-    NLam i x -> Lam i (asTerm x)
-    NTyLam i x -> TyLam i (asTerm x)
-    NCast x a b -> Cast (asTerm x) a b
-    NTick x tick -> Tick tick (asTerm x)
+    NData dc args -> mkApps (Data dc) (unsafeArgsToTerms args)
+    NLam i x -> Lam i (unsafeAsTerm x)
+    NTyLam i x -> TyLam i (unsafeAsTerm x)
+    NCast x a b -> Cast (unsafeAsTerm x) a b
+    NTick x tick -> Tick tick (unsafeAsTerm x)
 
-argsToTerms :: (AsTerm a) => Args a -> Args Term
-argsToTerms = fmap $ first asTerm
+unsafeArgsToTerms :: (AsTerm a) => Args a -> Args Term
+unsafeArgsToTerms = fmap $ first unsafeAsTerm
 
-altsToTerms :: (AsTerm a) => [(Pat, a)] -> [Alt]
-altsToTerms = fmap $ second asTerm
+unsafeAltsToTerms :: (AsTerm a) => [(Pat, a)] -> [Alt]
+unsafeAltsToTerms = fmap $ second unsafeAsTerm

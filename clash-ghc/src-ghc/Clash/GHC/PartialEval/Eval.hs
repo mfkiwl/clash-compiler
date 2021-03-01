@@ -48,6 +48,7 @@ import           BasicTypes (InlineSpec(..))
 #endif
 
 import           Clash.Core.DataCon (DataCon(..))
+import           Clash.Core.EqSolver (isAbsurdPat)
 import           Clash.Core.FreeVars (localVarsDoNotOccurIn)
 import           Clash.Core.Literal (Literal(..))
 import           Clash.Core.Name (nameOcc)
@@ -218,6 +219,31 @@ tickInlined i value =
   unQual = snd . Text.breakOnEnd "."
   nameOf = Text.unpack . unQual . nameOcc . varName
 
+-- Test whether a value is eligable for inlining.
+canInline :: Value -> Eval Bool
+canInline value = do
+  isSubj   <- isSubject
+  workFree <- if isSubj then expandableValue value else workFreeValue value
+  tcm      <- getTyConMap
+
+  let vTy = valueType tcm value
+  let isClass = isClassTy tcm vTy
+  -- let notSignal = isVar (unsafeAsTerm value) || not (Util.isSignalTypeExact vTy)
+
+  -- Inlining is tolerated if something is not work free but we are in the
+  -- subject of a case expression. GHC treats this as two different checks:
+  -- isWorkFree and isExpandable, maybe we should to?
+  let result = workFree || isClass
+
+{-
+  when (result == False && isSubj) $
+    traceM $ "canInline: isClass: " <> show isClass <> " expandable: " <> show workFree <> "\n" <> showPpr (unsafeAsTerm value)
+-}
+
+  pure result
+ where
+  valueType tcm = termType tcm . unsafeAsTerm
+
 lookupLocal :: Id -> Eval Value
 lookupLocal i = do
   var <- normVarTy i
@@ -225,19 +251,12 @@ lookupLocal i = do
 
   case val of
     Just x -> do
-      workFree <- workFreeValue x
-      isSubj <- isSubject
-      tcm <- getTyConMap
+      -- traceM ("lookupLocal: " <> showPpr var)
+      inlinable <- canInline x
 
-      -- traceM ("lookupLocal: " <> showPpr var <> ": workFree: " <> show workFree)
-
-      -- We tolerate inlining if we are in the subject of a case expression,
-      -- as it can lead to an opportunity to use caseCon. However, if it does
-      -- not, we should probably opt to not inline in the end to prevent work
-      -- being duplicated...
-      if workFree || isSubj -- || isClassTy tcm (varType var)
+      if inlinable
         then tickInlined var <$> forceEval x
-        else do -- traceM ("Not inlining: " <> showPpr var <> ": Does work")
+        else do -- traceM ("lookupLocal(" <> showPpr var <> "):\n" <> showPpr (unsafeAsTerm x))
                 pure (VNeutral (NeVar var))
 
     Nothing -> pure (VNeutral (NeVar var))
@@ -245,14 +264,9 @@ lookupLocal i = do
 lookupGlobal :: Id -> Eval Value
 lookupGlobal i = do
   var <- findBinding i
-  -- tcm <- getTyConMap
-  -- let isClass = isClassTy tcm (varType i)
 
   case var of
     Just x
-      -- |  isClass
-      -- -> forceEval (bindingTerm x)
-
       -- The binding cannot be inlined. Note that this is limited to bindings
       -- which are not primitives in Clash, as these must be marked NOINLINE.
       |  bindingSpec x == NoInline
@@ -263,19 +277,15 @@ lookupGlobal i = do
       |  otherwise
             -- We check if the identifier is work free, otherwise isWorkFreeBinder
             -- is not used and we may decide a self-recursive binding is work free.
-      -> do workFree <- workFreeValue (VNeutral $ NeVar $ bindingId x)
+      -> do inlinable <- canInline (VNeutral (NeVar i))
             fuel <- getFuel
 
-            if workFree
-              then do
-                -- traceM ("Inlining: " <> showPpr i <> ": work free")
-                updateGlobal x
+            if inlinable
+              then updateGlobal x
               else if fuel > 0
-                then do
-                  -- traceM ("Inlining: " <> showPpr i <> ": have fuel")
-                  withFuel (updateGlobal x)
+                then withFuel (updateGlobal x)
                 else do
-                  -- when (fuel == 0) $ traceM ("Not inlining: " <> showPpr i <> ": No fuel")
+                  -- when (fuel == 0) $ traceM ("lookupGlobal(" <> showPpr i <> "):\n" <> showPpr (unsafeAsTerm (bindingTerm x)))
                   pure (VNeutral (NeVar i))
 
     Nothing
@@ -502,12 +512,13 @@ evalLetrec bs x = evalSccs x (Util.sccLetBindings bs)
           val <- delayEval b
           rest <- withId var val (evalSccs body sccs)
           workFree <- workFreeValue val
+          expandable <- expandableValue val
 
           -- We keep let bindings which perform work, as it may not be possible
           -- to inline them during evaluation. Sometimes this is redundant, as
           -- the binding is only used once (and could be inlined) or is used
           -- as a case subject and would be removed from the final circuit.
-          if workFree
+          if workFree && expandable
             then pure rest
             else pure (VNeutral (NeLetrec [(var, val)] rest))
 
@@ -588,23 +599,27 @@ caseCon subject altTy alts = do
 -- case expression can only be neutral.
 --
 tryTransformCase :: Value -> Type -> [(Pat, Value)] -> Eval Value
-tryTransformCase subject altTy alts =
+tryTransformCase subject altTy alts = do
+  tcm <- getTyConMap
+  let filterAlts = filter (not . isAbsurdPat tcm . fst)
+
   case stripValue subject of
     -- A case of case: pull out the inner case expression if possible and
     -- attempt caseCon on the new case expression.
     VNeutral (NeCase innerSubject _ innerAlts) -> do
       forcedInnerAlts <- forceAlts innerAlts
+      let filteredAlts = filterAlts alts
 
       if any (isKnown . snd) forcedInnerAlts then
         -- We can do case of case, attempt caseCon on the result
-        let asCase v = VNeutral (NeCase v altTy alts)
+        let asCase v = VNeutral (NeCase v altTy filteredAlts)
             newAlts  = second asCase <$> forcedInnerAlts
          in caseCon innerSubject altTy newAlts
 
         -- We cannot do case of case, force alternatives and remove absurd
         -- patterns from the result.
       else do
-        forcedAlts <- forceAlts alts
+        forcedAlts <- filterAlts <$> forceAlts alts
         pure (VNeutral (NeCase subject altTy forcedAlts))
 
     -- A case of let: Pull out the let expression if possible and attempt
@@ -616,7 +631,7 @@ tryTransformCase subject altTy alts =
     -- There is no way to continue evaluating the case, force alternatives and
     -- remove any with absurd patterns, e.g. 'True ~ 'False.
     _ -> do
-      forcedAlts <- forceAlts alts
+      forcedAlts <- filterAlts <$> forceAlts alts
       pure (VNeutral (NeCase subject altTy forcedAlts))
  where
   -- We only care about case of case if alternatives of the inner case
@@ -943,10 +958,13 @@ apply val arg = do
   forced <- forceEval val
 
   workFree <- workFreeValue arg
-  let argTy = valueType tcm arg
-  let canApply = workFree -- || isClassTy tcm argTy
+  expandable <- expandableValue arg
+  let canApply = workFree && expandable
 
+  let argTy = valueType tcm arg
   let (lhs, ticks) = collectValueTicks forced
+
+  -- when (not canApply) (traceM ("apply:\n" <> showPpr (unsafeAsTerm arg)))
 
   case lhs of
     -- If the LHS of application evaluates to a letrec, then add any bindings
@@ -1019,7 +1037,7 @@ apply val arg = do
  where
   -- Somewhat of a cheat, but very quick to implement.
   -- TODO I would like a class HasCoreType a { coreTypeOf :: a -> Type }
-  valueType tcm = termType tcm . asTerm
+  valueType tcm = termType tcm . unsafeAsTerm
 
 applyTy :: (HasCallStack) => Value -> Type -> Eval Value
 applyTy val ty = do

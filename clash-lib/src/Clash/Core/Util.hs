@@ -284,7 +284,7 @@ isSignalType tcm ty = go HashSet.empty ty
     go tcSeen (tyView -> TyConApp tcNm args) = case nameOcc tcNm of
       "Clash.Signal.Internal.Signal"      -> True
       "Clash.Signal.BiSignal.BiSignalIn"  -> True
-      "Clash.Signal.Internal.BiSignalOut" -> True
+      "Clash.Signal.BiSignal.BiSignalOut" -> True
       _ | tcNm `HashSet.member` tcSeen    -> False -- Do not follow rec types
         | otherwise -> case lookupUniqMap tcNm tcm of
             Just tc -> let dcs         = tyConDataCons tc
@@ -296,6 +296,19 @@ isSignalType tcm ty = go HashSet.empty ty
                                      ++ " not found.") False
 
     go _ _ = False
+
+-- | Whether a type is _exactly_ a Signal type, i.e. has Signal at the outside
+-- of a TyConApp. This also includes BiSignals.
+--
+isSignalTypeExact :: Type -> Bool
+isSignalTypeExact (tyView -> TyConApp tcNm _) =
+  nameOcc tcNm `elem`
+    [ "Clash.Signal.Internal.Signal"
+    , "Clash.Signal.BiSignal.BiSignalIn"
+    , "Clash.Signal.BiSignal.BiSignalOut"
+    ]
+
+isSignalTypeExact _ = False
 
 -- | Determines whether given type is an (alias of en) Enable line.
 isEnable
@@ -432,6 +445,22 @@ undefinedTm
 undefinedTm =
   let undefinedNm = "Clash.Transformations.undefined" in
   TyApp (Prim (PrimInfo undefinedNm undefinedTy WorkNever SingleResult Nothing))
+
+undefinedPrims :: [T.Text]
+undefinedPrims =
+  [ "Clash.Transformations.undefined"
+  , "Clash.XException.errorX"
+  , "Control.Exception.Base.absentError"
+  , "Control.Exception.Base.patError"
+  , "EmptyCase"
+  , "GHC.Err.error"
+  , "GHC.Err.errorWithoutStackTrace"
+  , "GHC.Err.undefined"
+  , "GHC.Real.divZeroError"
+  , "GHC.Real.overflowError"
+  , "GHC.Real.ratioZeroDenominatorError"
+  , "GHC.Real.underflowError"
+  ]
 
 substArgTys
   :: DataCon

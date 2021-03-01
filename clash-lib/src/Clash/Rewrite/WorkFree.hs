@@ -18,11 +18,13 @@ module Clash.Rewrite.WorkFree
   , isWorkFreeIsh
   , isConstant
   , isConstantNotClockReset
+  , isExpandable
   ) where
 
 import Control.Lens (Lens')
 import Control.Monad.Extra (allM, andM, eitherM)
 import Control.Monad.State.Class (MonadState)
+import Data.Either (lefts)
 import GHC.Stack (HasCallStack)
 
 import Clash.Core.FreeVars
@@ -186,3 +188,58 @@ isWorkFreeIsh tcm e =
  where
   isWorkFreeIshArg = either (isWorkFreeIsh tcm) (const True)
   isConstantArg    = either isConstant (const True)
+
+-- | An expression is expandable if it can be duplicated when evaluating the
+-- subject of a case expression. The only expressions considered to be
+-- expandable are those which could lead to case-of-constructor being applied.
+--
+isExpandable :: BindingMap -> Term -> Bool
+isExpandable bndrs = go
+ where
+  goArgs = all go . lefts
+  goBndr = go . bindingTerm
+  goAlts = all go . fmap snd
+
+  go (collectArgs -> (f, args)) =
+    case f of
+      Var i
+        | isLocalId i -> goArgs args
+        | otherwise -> maybe False goBndr (lookupVarEnv i bndrs) && goArgs args
+
+      Data _ -> goArgs args
+      Literal _ -> True
+      Prim pr ->
+        -- There isn't any point inlining a primitive which does not correspond
+        -- to a literal which can be matched against.
+        primName pr `elem`
+          [ -- Clash builtin types
+            "Clash.Sized.Internal.BitVector.fromInteger##"
+          , "Clash.Sized.Internal.BitVector.fromInteger#"
+          , "Clash.Sized.Internal.Index.fromInteger#"
+          , "Clash.Sized.Internal.Signed.fromInteger#"
+          , "Clash.Sized.Internal.Unsigned.fromInteger#"
+            -- GHC builtin types
+          , "GHC.Types.C#"
+          , "GHC.Types.D#"
+          , "GHC.Types.F#"
+          , "GHC.Types.I#"
+          , "GHC.Types.I8#"
+          , "GHC.Types.I16#"
+          , "GHC.Types.I32#"
+          , "GHC.Types.I64#"
+          , "GHC.Types.W#"
+          , "GHC.Types.W8#"
+          , "GHC.Types.W16#"
+          , "GHC.Types.W32#"
+          , "GHC.Types.W64#"
+            -- Empty primtives
+          , "_CO_"
+          , "_TY_"
+          ] <> undefinedPrims && goArgs args
+
+      Lam _ x -> go x && goArgs args
+      TyLam _ x -> go x && goArgs args
+      Letrec _ x -> go x
+      Case x _ alts -> go x && goAlts alts
+      Tick _ x -> go x && goArgs args
+      _ -> False

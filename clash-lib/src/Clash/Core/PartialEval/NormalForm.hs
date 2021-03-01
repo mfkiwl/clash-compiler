@@ -40,6 +40,7 @@ import Clash.Core.Literal
 import Clash.Core.Term (Term(..), PrimInfo(..), TickInfo, Pat)
 import Clash.Core.TyCon (TyConMap)
 import Clash.Core.Type (Type, TyVar)
+import Clash.Core.Util (undefinedPrims)
 import Clash.Core.Var (Id)
 import Clash.Core.VarEnv (VarEnv, InScopeSet)
 import Clash.Driver.Types (Binding(..))
@@ -124,14 +125,7 @@ collectValueTicks = go []
 isUndefined :: Value -> Bool
 isUndefined = \case
   VNeutral (NePrim pr _) ->
-    primName pr `elem`
-      [ "Control.Exception.Base.absentError"
-      , "Control.Exception.Base.patError"
-      , "EmptyCase"
-      , "GHC.Err.undefined"
-      , "Clash.Transformations.undefined"
-      , "Clash.XException.errorX"
-      ]
+    primName pr `elem` undefinedPrims
 
   VNeutral (NeApp n _) ->
     isUndefined (VNeutral n)
