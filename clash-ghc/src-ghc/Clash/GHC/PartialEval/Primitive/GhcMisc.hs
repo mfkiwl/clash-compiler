@@ -52,6 +52,7 @@ ghcPrims = HashMap.fromList
   , ("GHC.Real.^_f", primF)
   , ("GHC.TypeLits.natVal", primNatValInteger)
   , ("GHC.TypeNats.natVal", primNatValNatural)
+  , ("Unsafe.Coerce.unsafeEqualityProof", liftId)
   ]
 
 primF :: PrimImpl

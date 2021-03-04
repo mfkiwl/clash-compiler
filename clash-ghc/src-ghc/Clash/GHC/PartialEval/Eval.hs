@@ -21,13 +21,14 @@ module Clash.GHC.PartialEval.Eval
   ) where
 
 import           Control.Exception (IOException)
-import           Control.Monad (filterM, foldM, when)
+import           Control.Monad (filterM, foldM, when, zipWithM)
 import           Control.Monad.Catch hiding (mask)
 import           Data.Bifunctor
 import           Data.Bitraversable
 import           Data.Either
 import           Data.Graph (SCC(..))
 import qualified Data.HashMap.Strict as HashMap
+import           Data.Maybe (catMaybes)
 import           Data.Primitive.ByteArray (ByteArray(..))
 import qualified Data.Text as Text
 
@@ -48,7 +49,7 @@ import           BasicTypes (InlineSpec(..))
 #endif
 
 import           Clash.Core.DataCon (DataCon(..))
-import           Clash.Core.EqSolver (isAbsurdPat)
+import           Clash.Core.EqSolver (isAbsurdPat, solveNonAbsurds, patEqs)
 import           Clash.Core.FreeVars (localVarsDoNotOccurIn)
 import           Clash.Core.Literal (Literal(..))
 import           Clash.Core.Name (nameOcc)
@@ -57,10 +58,11 @@ import           Clash.Core.PartialEval.Monad
 import           Clash.Core.PartialEval.NormalForm
 import           Clash.Core.Subst (deShadowAlt, deShadowTerm)
 import           Clash.Core.Term
-import           Clash.Core.TermInfo
+import           Clash.Core.TermInfo (applyTypeToArgs, termType)
 import           Clash.Core.Type
 import qualified Clash.Core.Util as Util
 import           Clash.Core.Var
+import           Clash.Core.VarEnv (mkVarSet)
 import           Clash.Debug (debugIsOn, traceM)
 import           Clash.Driver.Types (Binding(..), IsPrim(..))
 
@@ -253,10 +255,12 @@ lookupLocal i = do
     Just x -> do
       -- traceM ("lookupLocal: " <> showPpr var)
       inlinable <- canInline x
+      tcm <- getTyConMap
+      let isFun = isFunTy tcm (varType var)
 
-      if inlinable
+      if isFun || inlinable
         then tickInlined var <$> forceEval x
-        else do -- traceM ("lookupLocal(" <> showPpr var <> "):\n" <> showPpr (unsafeAsTerm x))
+        else do -- traceM ("lookupLocal(" <> showPpr var <> "): isFun: " <> show isFun <> " inlinable: " <> show inlinable <> "\n" <> showPpr (unsafeAsTerm x))
                 pure (VNeutral (NeVar var))
 
     Nothing -> pure (VNeutral (NeVar var))
@@ -408,12 +412,18 @@ etaExpand term = do
     x@(Prim pr, _) -> expand tcm (primType pr) x
     _ -> pure term
  where
-  etaNameOf =
-    either (pure . Right) (fmap Left . getUniqueId "eta")
+  etaNamesOf acc = \case
+    []        -> pure acc
+    (x:xs)  ->
+      case x of
+        Left tv  -> etaNamesOf (Right tv : acc) xs
+        Right ty -> do
+          i <- getUniqueId "eta" ty
+          withInScope i (etaNamesOf (Left i : acc) xs)
 
   expand tcm ty (tm, args) = do
     let (missingTys, _) = splitFunForallTy (applyTypeToArgs tm tcm ty args)
-    missingArgs <- traverse etaNameOf missingTys
+    missingArgs <- reverse <$> etaNamesOf [] missingTys
 
     pure $ mkAbstraction
       (mkApps term (fmap (bimap Var VarTy) missingArgs))
@@ -511,14 +521,18 @@ evalLetrec bs x = evalSccs x (Util.sccLetBindings bs)
           var <- normVarTy i
           val <- delayEval b
           rest <- withId var val (evalSccs body sccs)
+
+          tcm <- getTyConMap
           workFree <- workFreeValue val
           expandable <- expandableValue val
+          let isClass = isClassTy tcm (varType var)
+          let isFun = isFunTy tcm (varType var)
 
           -- We keep let bindings which perform work, as it may not be possible
           -- to inline them during evaluation. Sometimes this is redundant, as
           -- the binding is only used once (and could be inlined) or is used
           -- as a case subject and would be removed from the final circuit.
-          if workFree && expandable
+          if isClass || isFun || (workFree && expandable)
             then pure rest
             else pure (VNeutral (NeLetrec [(var, val)] rest))
 
@@ -539,13 +553,6 @@ evalLetrec bs x = evalSccs x (Util.sccLetBindings bs)
           pure (VNeutral (NeLetrec binds rest))
 
 evalCase :: (HasCallStack) => Term -> Type -> [Alt] -> Eval Value
--- There is only one alternative, if the term does not use any of the bound
--- (type) variables in the pattern then the entire case expression can be
--- replaced with the RHS of this alternative.
-evalCase _ _ [(pat, term)]
-  | localVarsDoNotOccurIn (patVars pat) term
-  = eval term
-
 evalCase term ty as = do
   subject <- withSubject (delayEval term)
   altTy <- normTy ty
@@ -555,10 +562,14 @@ evalCase term ty as = do
   inScope <- getInScope
   alts <- delayAlts (deShadowAlt inScope <$> as)
 
-  -- We set the pattern tyvars / ids as being in scope before evaluating the case.
-  --
-  let bound = concatMap (patVars . fst) alts
-  withInScopeList bound (caseCon subject altTy alts)
+  case alts of
+    [(p, v)]
+      | localVarsDoNotOccurIn (patVars p) (unsafeAsTerm v) -> forceEval v
+
+    _ ->
+      -- Set the pattern vars as being in scope before evaluating the case.
+      let bound = concatMap (patVars . fst) alts
+       in withInScopeList bound (caseCon subject altTy alts)
 
 -- | Attempt to apply the case-of-known-constructor transformation on a case
 -- expression. If no suitable alternative can be chosen, attempt to transform
@@ -599,27 +610,22 @@ caseCon subject altTy alts = do
 -- case expression can only be neutral.
 --
 tryTransformCase :: Value -> Type -> [(Pat, Value)] -> Eval Value
-tryTransformCase subject altTy alts = do
-  tcm <- getTyConMap
-  let filterAlts = filter (not . isAbsurdPat tcm . fst)
-
+tryTransformCase subject altTy alts =
   case stripValue subject of
     -- A case of case: pull out the inner case expression if possible and
     -- attempt caseCon on the new case expression.
     VNeutral (NeCase innerSubject _ innerAlts) -> do
       forcedInnerAlts <- forceAlts innerAlts
-      let filteredAlts = filterAlts alts
 
       if any (isKnown . snd) forcedInnerAlts then
         -- We can do case of case, attempt caseCon on the result
-        let asCase v = VNeutral (NeCase v altTy filteredAlts)
+        let asCase v = VNeutral (NeCase v altTy alts)
             newAlts  = second asCase <$> forcedInnerAlts
          in caseCon innerSubject altTy newAlts
 
-        -- We cannot do case of case, force alternatives and remove absurd
-        -- patterns from the result.
+        -- We cannot do case of case, force alternatives.
       else do
-        forcedAlts <- filterAlts <$> forceAlts alts
+        forcedAlts <- forceAlts alts
         pure (VNeutral (NeCase subject altTy forcedAlts))
 
     -- A case of let: Pull out the let expression if possible and attempt
@@ -628,10 +634,9 @@ tryTransformCase subject altTy alts = do
       newCase <- caseCon innerSubject altTy alts
       pure (VNeutral (NeLetrec bindings newCase))
 
-    -- There is no way to continue evaluating the case, force alternatives and
-    -- remove any with absurd patterns, e.g. 'True ~ 'False.
+    -- There is no way to continue evaluating the case, force all alternatives.
     _ -> do
-      forcedAlts <- filterAlts <$> forceAlts alts
+      forcedAlts <- forceAlts alts
       pure (VNeutral (NeCase subject altTy forcedAlts))
  where
   -- We only care about case of case if alternatives of the inner case
@@ -651,27 +656,69 @@ tryTransformCase subject altTy alts = do
     VData{} -> True
     _ -> False
 
-delayAlts :: [Alt] -> Eval [(Pat, Value)]
-delayAlts = traverse (bitraverse delayPat delayAlways)
+-- | For each pattern, solve existential variables and refine until either no
+-- more existentials can be solved, or the pattern can be identified as absurd.
+--
+-- This corresponds to elimExistentials and caseElemNonReachable in the old
+-- transformation pipeline.
+--
+solveAndElim :: [Pat] -> Eval [Maybe (Pat, [(TyVar, Type)])]
+solveAndElim pats = do
+  tcm <- getTyConMap
+  traverse (go tcm []) pats
  where
-  delayPat = \case
-    DataPat dc tvs ids -> do
-      tvs' <- traverse normVarTy tvs
-      let tys  = fmap (\tv -> (tv, VarTy tv)) tvs'
+  go tcm sols pat
+    -- We obviously don't want to keep absurd patterns.
+    | isAbsurdPat tcm pat =
+        pure Nothing
 
+    | otherwise =
+        case pat of
+          DataPat dc tvs ids ->
+            case solveNonAbsurds tcm (mkVarSet tvs) (patEqs tcm pat) of
+              -- No new solutions, the pattern cannot be refined further.
+              [] -> pure (Just (pat, sols))
+
+              -- New solutions are available, using these solutions may mean
+              -- checking again yields more solutions.
+              ss -> withTyVars ss $ do
+                      ids' <- traverse normVarTy ids
+                      go tcm (sols <> ss) (DataPat dc tvs ids')
+
+          _ -> pure (Just (pat, sols))
+
+-- Delay the evaluation of alternatives, eliminating any alternatives
+-- immediately if they can be shown to be absurd by 'solveAndElim'.
+--
+delayAlts :: [Alt] -> Eval [(Pat, Value)]
+delayAlts alts = do
+  normPats <- traverse normPat (fmap fst alts)
+  solvedPats <- solveAndElim normPats
+  let terms = fmap snd alts
+
+  newAlts <- zipWithM goAlts solvedPats terms
+  pure (catMaybes newAlts)
+ where
+  normPat = \case
+    DataPat dc tvs ids -> do
+      -- We still need to normalize the tyvars and ids with the types in scope
+      -- before we try to use solveAndElim. If we skip this, solveAndElim may
+      -- not be able to solve anything at all, and absurd alts won't be removed.
+      tvs' <- traverse normVarTy tvs
+      let tys = fmap (\tv -> (tv, VarTy tv)) tvs'
       ids' <- withTyVars tys (traverse normVarTy ids)
 
       pure (DataPat dc tvs' ids')
 
     pat -> pure pat
 
-  -- We always need to delay primitives in case alternatives, as they may
-  -- require variables bound in patterns to evaluate correctly.
-  --
-  -- TODO Maybe I need some kind of evaluator context type to tidy up these
-  -- special rules, e.g. Normal | CaseSubject | CaseAlternative | Argument
-  delayAlways term =
-    VThunk term <$> getLocalEnv
+  goAlts patSols term =
+    case patSols of
+      Nothing -> pure Nothing
+      Just (pat, tys) ->
+        withTyVars tys $ do
+          value <- VThunk term <$> getLocalEnv
+          pure (Just (pat, value))
 
 forceAlts :: [(Pat, Value)] -> Eval [(Pat, Value)]
 forceAlts = traverse (bitraverse pure forceEval)
@@ -956,12 +1003,14 @@ apply :: (HasCallStack) => Value -> Value -> Eval Value
 apply val arg = do
   tcm <- getTyConMap
   forced <- forceEval val
+  let argTy = valueType tcm arg
 
   workFree <- workFreeValue arg
   expandable <- expandableValue arg
-  let canApply = workFree && expandable
+  let isClass  = isClassTy tcm argTy
+      isFun    = isFunTy tcm argTy
+  let canApply = isClass || isFun || (workFree && expandable)
 
-  let argTy = valueType tcm arg
   let (lhs, ticks) = collectValueTicks forced
 
   -- when (not canApply) (traceM ("apply:\n" <> showPpr (unsafeAsTerm arg)))

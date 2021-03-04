@@ -6,6 +6,7 @@ module Clash.GHC.PartialEval.Primitive.Vector
   ( vectorPrims
   ) where
 
+import Control.Monad (when)
 import Control.Monad.Catch (throwM)
 import Data.HashMap.Strict (HashMap)
 import qualified Data.HashMap.Strict as HashMap (fromList)
@@ -19,9 +20,16 @@ import Clash.Sized.Internal.BitVector (BitVector)
 import Clash.Sized.Vector (Vec)
 import qualified Clash.Sized.Vector as Vec
 
+import Clash.Core.DataCon
+import Clash.Core.Literal
+import Clash.Core.Name
 import Clash.Core.PartialEval.Monad
 import Clash.Core.PartialEval.NormalForm
+import Clash.Core.Term
+import Clash.Core.Type
+import Clash.Core.TysPrim (intPrimTy)
 
+import {-# SOURCE #-} Clash.GHC.PartialEval.Eval
 import Clash.GHC.PartialEval.Primitive.FromAst
 import Clash.GHC.PartialEval.Primitive.Info
 import Clash.GHC.PartialEval.Primitive.Strategy
@@ -39,14 +47,14 @@ vectorPrims = HashMap.fromList
   , ("Clash.Sized.Vector.foldr", coreUnfolding)
   , ("Clash.Sized.Vector.head", coreUnfolding)
   , ("Clash.Sized.Vector.imap", coreUnfolding)
-  , ("Clash.Sized.Vector.index_int", coreUnfolding)
+  , ("Clash.Sized.Vector.index_int", primIndexInt)
   , ("Clash.Sized.Vector.init", coreUnfolding)
   , ("Clash.Sized.Vector.iterateI", coreUnfolding)
   , ("Clash.Sized.Vector.last", coreUnfolding)
   , ("Clash.Sized.Vector.lazyV", coreUnfolding)
   , ("Clash.Sized.Vector.length", coreUnfolding)
   , ("Clash.Sized.Vector.map", coreUnfolding)
-  , ("Clash.Sized.Vector.replace_int", coreUnfolding)
+  , ("Clash.Sized.Vector.replace_int", primReplaceInt)
   , ("Clash.Sized.Vector.replicate", primReplicate)
   , ("Clash.Sized.Vector.reverse", coreUnfolding)
   , ("Clash.Sized.Vector.rotateLeftS", coreUnfolding)
@@ -61,39 +69,66 @@ vectorPrims = HashMap.fromList
   , ("Clash.Sized.Vector.zipWith", coreUnfolding)
   ]
 
+primIndexInt :: PrimImpl
+primIndexInt _eval pr args
+  | [Right n, Right a, Left knN, Left x, Left y] <- args
+  = do szN <- typeSize n (Just knN)
+       ix  <- fromValueForce @Int y
+       when (ix < 0) (throwM ResultUndefined)
+
+       forceEval x >>= \case
+         VData dc dcArgs _
+           | nameOcc (dcName dc) == "Clash.Sized.Vector.Vec.Nil" ->
+               throwM ResultUndefined
+
+           | nameOcc (dcName dc) == "Clash.Sized.Vector.Vec.Cons"
+           , [_, _, _, _, Left el, Left rest] <- dcArgs ->
+               if ix == 0 then forceEval el else do
+                 ix' <- toValue (ix - 1) intPrimTy
+                 let n'   = LitTy (NumTy (szN - 1))
+                     knN' = VLiteral (NaturalLiteral (szN - 1))
+
+                 primIndexInt _eval pr
+                   [Right n', Right a, Left knN', Left rest, Left ix']
+
+         _ -> empty
+
+  | otherwise
+  = empty
+
+primReplaceInt :: PrimImpl
+primReplaceInt _eval pr args
+  | [Right n, Right a, Left knN, Left x, Left y, new] <- args
+  = do szN <- typeSize n (Just knN)
+       ix  <- fromValueForce @Int y
+       when (ix < 0 || szN <= toInteger ix) (throwM ResultUndefined)
+
+       forceEval x >>= \case
+         VData dc dcArgs env
+           | nameOcc (dcName dc) == "Clash.Sized.Vector.Vec.Nil" ->
+               throwM ResultUndefined
+
+           | nameOcc (dcName dc) == "Clash.Sized.Vector.Vec.Cons"
+           , [nTy, aTy, mTy, co, el, rest] <- dcArgs ->
+               if ix == 0 then
+                 pure (VData dc [nTy, aTy, mTy, co, new, rest] env)
+               else do
+                 ix' <- toValue (ix - 1) intPrimTy
+                 let n'   = LitTy (NumTy (szN - 1))
+                     knN' = VLiteral (NaturalLiteral (szN - 1))
+
+                 primReplaceInt _eval pr
+                   [Right n', Right a, Left knN', rest, Left ix', new]
+
+         _ -> empty
+
+  | otherwise
+  = empty
+
 {-
 TODO These seem to not be needed (core unfolding works) but may be needed for
 performance reasons when rewrites are later thinned out / removed. If not, then
 this comment can be deleted.
-
-primIndexInt :: PrimImpl
-primIndexInt eval pr args
-  | [Right n, Right a, Left knN, Left x, Left y] <- args
-  = do szN <- typeSize n (Just knN)
-       i <- fromValueForce y
-
-       if 0 <= i && toInteger i < szN
-         then go i x
-         else throwM ResultUndefined
-
-  | otherwise
-  = empty
- where
-  go :: Int -> Value -> Eval Value
-  go 0 x = do
-    vec <- fromValueForce x
-    resTy <- resultType pr args
-
-    case vec of
-      LNil -> throwM ResultUndefined
-      LCons y _ -> toValue y resTy
-
-  go i x = do
-    vec <- fromValueForce x
-
-    case vec of
-      LNil -> throwM ResultUndefined
-      LCons _ ys -> go (i - 1) ys
 
 primReplaceInt :: PrimImpl
 primReplaceInt eval pr args

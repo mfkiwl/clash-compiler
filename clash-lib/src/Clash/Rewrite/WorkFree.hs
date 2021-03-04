@@ -35,7 +35,7 @@ import Clash.Core.TyCon (TyConMap)
 import Clash.Core.Type (isPolyFunTy)
 import Clash.Core.Util
 import Clash.Core.Var (Id, Var(..), isLocalId)
-import Clash.Core.VarEnv (VarEnv, lookupVarEnv)
+import Clash.Core.VarEnv
 import Clash.Driver.Types (BindingMap, Binding(..))
 import Clash.Util (makeCachedU)
 
@@ -194,19 +194,23 @@ isWorkFreeIsh tcm e =
 -- expandable are those which could lead to case-of-constructor being applied.
 --
 isExpandable :: BindingMap -> Term -> Bool
-isExpandable bndrs = go
+isExpandable bndrs = go emptyVarSet
  where
-  goArgs = all go . lefts
-  goBndr = go . bindingTerm
-  goAlts = all go . fmap snd
+  goArgs seen = all (go seen) . lefts
+  goAlts seen = all (go seen) . fmap snd
+  goBndr seen x
+    | bindingId x `elemVarSet` seen = False
+    | otherwise = go seen (bindingTerm x)
 
-  go (collectArgs -> (f, args)) =
+  go seen (collectArgs -> (f, args)) =
     case f of
       Var i
-        | isLocalId i -> goArgs args
-        | otherwise -> maybe False goBndr (lookupVarEnv i bndrs) && goArgs args
+        | isLocalId i -> goArgs seen args
+        | otherwise ->
+            let seen' = seen `unionVarSet` unitVarSet i
+             in maybe False (goBndr seen') (lookupVarEnv i bndrs) && goArgs seen' args
 
-      Data _ -> goArgs args
+      Data _ -> True
       Literal _ -> True
       Prim pr ->
         -- There isn't any point inlining a primitive which does not correspond
@@ -219,6 +223,7 @@ isExpandable bndrs = go
           , "Clash.Sized.Internal.Signed.fromInteger#"
           , "Clash.Sized.Internal.Unsigned.fromInteger#"
             -- GHC builtin types
+          , "GHC.CString.unpackCString#"
           , "GHC.Types.C#"
           , "GHC.Types.D#"
           , "GHC.Types.F#"
@@ -232,14 +237,14 @@ isExpandable bndrs = go
           , "GHC.Types.W16#"
           , "GHC.Types.W32#"
           , "GHC.Types.W64#"
-            -- Empty primtives
+            -- Special primtives
           , "_CO_"
           , "_TY_"
-          ] <> undefinedPrims && goArgs args
+          ] <> undefinedPrims && goArgs seen args
 
-      Lam _ x -> go x && goArgs args
-      TyLam _ x -> go x && goArgs args
-      Letrec _ x -> go x
-      Case x _ alts -> go x && goAlts alts
-      Tick _ x -> go x && goArgs args
+      Lam _ x -> go seen x && goArgs seen args
+      TyLam _ x -> go seen x && goArgs seen args
+      Letrec _ x -> go seen x
+      Case x _ alts -> go seen x && goAlts seen alts
+      Tick _ x -> go seen x && goArgs seen args
       _ -> False
