@@ -6,22 +6,31 @@ Functions to read, write, and handle manifest files.
 {-# LANGUAGE LambdaCase #-}
 {-# LANGUAGE NamedFieldPuns #-}
 {-# LANGUAGE RecordWildCards #-}
+{-# LANGUAGE OverloadedStrings #-}
 
 module Clash.Driver.Manifest where
 
 import           Control.Exception (tryJust)
-import           Control.Monad (guard)
+import           Control.Monad (guard, forM)
 import qualified Crypto.Hash.SHA256 as Sha256
+import qualified Data.Aeson as Aeson
+import qualified Data.Aeson.Encode.Pretty as Aeson
+import           Data.Aeson
+  (ToJSON(toJSON), FromJSON(parseJSON), KeyValue ((.=)), (.:))
+import qualified Data.ByteString.Base16 as Base16
 import qualified Data.ByteString.Lazy as ByteStringLazy
 import           Data.ByteString (ByteString)
 import           Data.Hashable (hash)
+import qualified Data.HashMap.Strict as HashMap
 import           Data.Maybe (catMaybes)
 import qualified Data.Text as Text
-import qualified Data.Text.IO as Text
+import qualified Data.Text.Encoding as Text
+import qualified Data.Text.Lazy as LText
+import qualified Data.Text.Lazy.Encoding as LText
 import           Data.Text (Text)
 import           Data.Time (UTCTime)
 import qualified Data.Set as Set
-import           Text.Read (readMaybe)
+import           Data.String (IsString)
 import           System.IO.Error (isDoesNotExistError)
 import           System.FilePath (takeDirectory, (</>))
 import           System.Directory (listDirectory, doesFileExist)
@@ -67,6 +76,55 @@ data Manifest
     -- are SHA256.
   } deriving (Show,Read)
 
+instance ToJSON Manifest where
+  toJSON (Manifest{..}) =
+    Aeson.object
+      [ "version" .= ("unstable" :: Text)
+      , "hash" .= manifestHash
+      , "flags" .= successFlags
+        -- TODO: add nested ports (i.e., how Clash split/filtered arguments)
+      , "components" .= componentNames
+      , "top_component" .= Aeson.object
+        [ "name" .= topComponent
+        , "ports_flat" .= Aeson.object
+          -- TODO: add width / type information
+          [ "in" .= [Aeson.object [ "name" .= p ] | p <- portInNames]
+          , "out" .= [Aeson.object [ "name" .= p ] | p <- portOutNames] ]
+        ]
+      , "files" .= Aeson.object
+        [ Text.pack fName .= Aeson.object
+          [ "sha256" .= Text.decodeUtf8 (Base16.encode fHash)
+            -- TODO: Add Edam like fields
+          ]
+        | (fName, fHash) <- fileNames]
+      ]
+
+instance FromJSON Manifest where
+  parseJSON = Aeson.withObject "Manifest" $ \v ->
+    let
+      topComponent = v .: "top_component"
+      portsFlat = topComponent >>= (.: "ports_flat")
+    in
+      Manifest
+        <$> v .: "hash"
+        <*> v .: "flags"
+        <*> (portsFlat >>= (.: "in") >>= (mapM (.: "name")))
+        <*> (portsFlat >>= (.: "out") >>= (mapM (.: "name")))
+        <*> v .: "components"
+        <*> (topComponent >>= (.: "name"))
+        <*> do
+              files <- fmap HashMap.toList (v .: "files")
+              forM files $ \(fName, obj) -> do
+                sha256 <- obj .: "sha256"
+                -- Note that we don't particularly care about hash decode
+                -- failures. Realistically it shouldn't happen, and if it does
+                -- there's almost no chance it would result in accidental caching.
+#if MIN_VERSION_base16_bytestring(1,0,0)
+                pure (fName, Base16.decodeLenient (Text.encodeUtf8 sha256))
+#else
+                pure (fName, fst (Base16.decode (Text.encodeUtf8 sha256)))
+#endif
+
 data UnexpectedModification
   -- | Clash generated file was modified
   = Modified FilePath
@@ -75,6 +133,10 @@ data UnexpectedModification
   -- | Clash generated file was removed
   | Removed FilePath
   deriving (Show)
+
+-- | Filename manifest file should be written to and read from
+manifestFilename :: IsString a => a
+manifestFilename = "clash-manifest.json"
 
 mkManifest ::
   -- | Options Clash was run with
@@ -229,12 +291,11 @@ readFreshManifest tops (bindingsMap, topId) primMap opts@(ClashOpts{..}) clashMo
 -- in contains any user made modifications. This is used by Clash to protect the
 -- user against lost work.
 isUserModified :: FilePath -> Manifest -> IO [UnexpectedModification]
-isUserModified (takeDirectory -> topDir) Manifest{fileNames,topComponent} = do
+isUserModified (takeDirectory -> topDir) Manifest{fileNames} = do
   let
     manifestFiles = Set.fromList (map fst fileNames)
-    manFile = Text.unpack topComponent <> ".manifest"
 
-  currentFiles <- (Set.delete manFile . Set.fromList) <$> listDirectory topDir
+  currentFiles <- (Set.delete manifestFilename . Set.fromList) <$> listDirectory topDir
 
   let
     removedFiles = Set.toList (manifestFiles `Set.difference` currentFiles)
@@ -264,15 +325,15 @@ isUserModified (takeDirectory -> topDir) Manifest{fileNames,topComponent} = do
 -- Any other IO exception is re-raised.
 readManifest :: FilePath -> IO (Maybe Manifest)
 readManifest path = do
-  contentsE <- tryJust (guard . isDoesNotExistError) (readFile path)
-  pure (either (const Nothing) readMaybe contentsE)
+  contentsE <- tryJust (guard . isDoesNotExistError) (Aeson.decodeFileStrict path)
+  pure (either (const Nothing) id contentsE)
 
 -- | Write manifest file to disk
-writeManifest :: Manifest -> FilePath -> IO ()
-writeManifest man path = Text.writeFile path (serializeManifest man)
+writeManifest :: FilePath -> Manifest -> IO ()
+writeManifest path = ByteStringLazy.writeFile path . Aeson.encodePretty
 
 -- | Serialize a manifest.
 --
 -- TODO: This should really yield a 'ByteString'.
 serializeManifest :: Manifest -> Text
-serializeManifest = Text.pack . show
+serializeManifest = LText.toStrict . LText.decodeUtf8 . Aeson.encodePretty
